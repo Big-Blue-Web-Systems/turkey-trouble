@@ -22,11 +22,14 @@
 
   const SPIN_MIN_MS = 70;
   const SPIN_MAX_MS = 140;
-  const REACTION_DELAY_MS = 1500;
+  const REACTION_DELAY_MS = 1000;
   /** Gunshot / feather-burst peak in turkey-trouble-fire.mp4 */
   const FIRE_GUNSHOT_MS = 150;
   const TILE_PULSE_MS = 550;
   const TILE_FLIP_MS = 450;
+  const REACTION_FLASH_MS = 1000;
+  const REACTION_CLIP_MS = 3000;
+  const REACTION_CLIP_FPS = 10;
   const FAVORITES_KEY = "turkeyTroubleFavorites";
 
   const board = document.getElementById("board");
@@ -35,15 +38,29 @@
   const captureCanvas = document.getElementById("capture");
   const cameraStatus = document.getElementById("camera-status");
   const cameraWell = board.querySelector(".camera-well");
+  const cameraBorder = document.querySelector(".camera-border");
+  const bannerImage = new Image();
+  bannerImage.decoding = "async";
+  bannerImage.src = cameraBorder?.src || "assets/camera-border.png";
   const resultBanner = document.getElementById("result-banner");
   const turkeyBlast = document.getElementById("turkey-blast");
   const fireVideo = document.getElementById("fire-video");
   const bustVideo = document.getElementById("bust-video");
   const fireHit = document.getElementById("fire-hit");
+  const reactionFlash = document.getElementById("reaction-flash");
+  const reactionFlashImage = document.getElementById("reaction-flash-image");
   const turnHud = document.getElementById("turn-hud");
   const scoreEl = document.getElementById("score");
   const scoreLabel = document.getElementById("score-label");
   const reactionStrip = document.getElementById("reaction-strip");
+  const reactionsStackWrap = document.querySelector(".reactions-stack-wrap");
+  const reactionsPrevBtn = document.getElementById("reactions-prev");
+  const reactionsNextBtn = document.getElementById("reactions-next");
+  let reactionFocusIndex = 0;
+  const REACTION_STACK_PEEK = 24;
+  const REACTION_STACK_SCALE = 0.04;
+  const REACTION_STACK_VISIBLE = 6;
+  let reactionWheelLockUntil = 0;
   const btnAction = document.getElementById("btn-action");
   const btnBank = document.getElementById("btn-bank");
   const controls = document.getElementById("controls");
@@ -55,6 +72,14 @@
   const playerList = document.getElementById("player-list");
   const btnDonePlayers = document.getElementById("btn-done-players");
   const btnStartFromSetup = document.getElementById("btn-start-from-setup");
+  const roundsPicker = document.getElementById("rounds-picker");
+  const roundsTrigger = document.getElementById("rounds-trigger");
+  const roundsTriggerValue = document.getElementById("rounds-trigger-value");
+  const roundsMenu = document.getElementById("rounds-menu");
+  const scoreboard = document.getElementById("scoreboard");
+  const roundLabel = document.getElementById("round-label");
+  const captureVideoToggle = document.getElementById("capture-video-toggle");
+  let selectedRounds = 1;
   const soloWarning = document.getElementById("solo-warning");
   const leaderboard = document.getElementById("leaderboard");
   const leaderboardList = document.getElementById("leaderboard-list");
@@ -73,9 +98,10 @@
 
   /** @type {{ value: number, isTurkey: boolean, el: HTMLButtonElement }[]} */
   let tiles = [];
-  /** @type {{ name: string, banked: number, reactions: {dataUrl:string,label:string,bust:boolean}[], favorite: string|null, done: boolean }[]} */
+  /** @type {{ name: string, banked: number, reactions: {dataUrl:string,frames?:string[],frameIndex?:number,isClip?:boolean,label:string,bust:boolean}[], favorite: string|null, done: boolean, roundsPlayed: number }[]} */
   let players = [];
   let currentPlayer = 0;
+  let totalRounds = 1;
   let turnScore = 0;
   let spinsThisTurn = 0;
   let gameStarted = false;
@@ -406,6 +432,123 @@
 
   function clearReactionStrip() {
     reactionStrip.innerHTML = "";
+    reactionFocusIndex = 0;
+    updateReactionsNav();
+  }
+
+  const reactionsLayoutQuery = window.matchMedia("(max-width: 760px)");
+
+  function isReactionsHorizontal() {
+    return reactionsLayoutQuery.matches;
+  }
+
+  function syncReactionsNavLabels() {
+    const horizontal = isReactionsHorizontal();
+    if (reactionsPrevBtn) {
+      reactionsPrevBtn.textContent = horizontal ? "◀" : "▲";
+      reactionsPrevBtn.setAttribute(
+        "aria-label",
+        horizontal ? "Scroll reactions left" : "Previous reaction"
+      );
+    }
+    if (reactionsNextBtn) {
+      reactionsNextBtn.textContent = horizontal ? "▶" : "▼";
+      reactionsNextBtn.setAttribute(
+        "aria-label",
+        horizontal ? "Scroll reactions right" : "Next reaction"
+      );
+    }
+  }
+
+  function getReactionCards() {
+    return Array.from(reactionStrip.querySelectorAll(".reaction-card"));
+  }
+
+  function updateReactionsNav() {
+    const cards = getReactionCards();
+    const count = cards.length;
+    if (isReactionsHorizontal()) {
+      const wrap = reactionsStackWrap;
+      if (!wrap || !count) {
+        if (reactionsPrevBtn) reactionsPrevBtn.disabled = true;
+        if (reactionsNextBtn) reactionsNextBtn.disabled = true;
+        return;
+      }
+      const maxScroll = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+      if (reactionsPrevBtn) reactionsPrevBtn.disabled = wrap.scrollLeft <= 2;
+      if (reactionsNextBtn) reactionsNextBtn.disabled = wrap.scrollLeft >= maxScroll - 2;
+      return;
+    }
+    if (reactionsPrevBtn) {
+      reactionsPrevBtn.disabled = count === 0 || reactionFocusIndex <= 0;
+    }
+    if (reactionsNextBtn) {
+      reactionsNextBtn.disabled = count === 0 || reactionFocusIndex >= count - 1;
+    }
+  }
+
+  function clearReactionCardLayout(card) {
+    card.classList.remove("is-front");
+    card.style.zIndex = "";
+    card.style.opacity = "";
+    card.style.pointerEvents = "";
+    card.style.transform = "";
+    card.removeAttribute("aria-hidden");
+  }
+
+  function layoutReactionsStack() {
+    const cards = getReactionCards();
+    syncReactionsNavLabels();
+
+    if (isReactionsHorizontal()) {
+      cards.forEach(clearReactionCardLayout);
+      updateReactionsNav();
+      return;
+    }
+
+    const count = cards.length;
+    if (!count) {
+      updateReactionsNav();
+      return;
+    }
+
+    reactionFocusIndex = Math.max(0, Math.min(count - 1, reactionFocusIndex));
+
+    cards.forEach((card, index) => {
+      const offset = index - reactionFocusIndex;
+      const abs = Math.abs(offset);
+      const behind = offset >= 0;
+      const hidden = abs > REACTION_STACK_VISIBLE;
+      const y = behind ? offset * REACTION_STACK_PEEK : offset * (REACTION_STACK_PEEK + 10);
+      const scale = Math.max(0.72, 1 - abs * REACTION_STACK_SCALE);
+      const opacity = hidden ? 0 : Math.max(0.25, 1 - abs * 0.16);
+      // Front on top; older cards stack downward behind it.
+      const z = offset === 0 ? 1000 : behind ? 900 - offset : 800 - abs;
+
+      card.classList.toggle("is-front", offset === 0);
+      card.style.zIndex = String(z);
+      card.style.opacity = String(opacity);
+      card.style.pointerEvents = abs <= 2 ? "auto" : "none";
+      card.style.transform = `translateX(-50%) translateY(${y}px) scale(${scale})`;
+      card.setAttribute("aria-hidden", hidden ? "true" : "false");
+    });
+
+    updateReactionsNav();
+  }
+
+  function shiftReactionFocus(delta) {
+    if (isReactionsHorizontal()) {
+      if (!reactionsStackWrap) return;
+      const step = Math.max(120, Math.round(reactionsStackWrap.clientWidth * 0.6));
+      reactionsStackWrap.scrollBy({ left: delta * step, behavior: "smooth" });
+      return;
+    }
+    const count = getReactionCards().length;
+    if (!count) return;
+    const next = Math.max(0, Math.min(count - 1, reactionFocusIndex + delta));
+    if (next === reactionFocusIndex) return;
+    reactionFocusIndex = next;
+    layoutReactionsStack();
   }
 
   function escapeHtml(str) {
@@ -463,15 +606,69 @@
     });
   }
 
+  function isReactionVideoMode() {
+    return !!captureVideoToggle?.checked;
+  }
+
   function syncSetupButtons() {
     const editorOpen = !playersEditor.hidden;
     btnDonePlayers.hidden = !(gameStarted && editorOpen);
     btnAddPlayers.hidden = editorOpen;
     btnStartFromSetup.hidden = gameStarted || !editorOpen;
+    roundsTrigger.disabled = gameStarted;
+    if (captureVideoToggle) {
+      captureVideoToggle.disabled = gameStarted;
+      captureVideoToggle.setAttribute("aria-checked", captureVideoToggle.checked ? "true" : "false");
+    }
+    if (gameStarted) closeRoundsMenu();
+    if (roundsPicker) roundsPicker.hidden = false;
+  }
+
+  function readTotalRounds() {
+    return selectedRounds === 3 || selectedRounds === 5 ? selectedRounds : 1;
+  }
+
+  function setSelectedRounds(n) {
+    selectedRounds = n === 3 || n === 5 ? n : 1;
+    roundsTriggerValue.textContent = String(selectedRounds);
+    roundsMenu.querySelectorAll('[role="option"]').forEach((opt) => {
+      const on = Number(opt.dataset.value) === selectedRounds;
+      opt.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+
+  function closeRoundsMenu() {
+    roundsMenu.hidden = true;
+    roundsTrigger.setAttribute("aria-expanded", "false");
+  }
+
+  function openRoundsMenu() {
+    if (gameStarted || roundsTrigger.disabled) return;
+    roundsMenu.hidden = false;
+    roundsTrigger.setAttribute("aria-expanded", "true");
+  }
+
+  function toggleRoundsMenu() {
+    if (roundsMenu.hidden) openRoundsMenu();
+    else closeRoundsMenu();
+  }
+
+  function currentRoundNumber(player) {
+    if (!player) return 1;
+    return Math.min((player.roundsPlayed || 0) + 1, totalRounds);
   }
 
   function syncTurnHud() {
     turnHud.hidden = !gameStarted;
+    const player = players[currentPlayer];
+    if (!gameStarted || !player) return;
+    scoreLabel.textContent = player.name;
+    const multiRound = totalRounds > 1;
+    scoreboard.classList.toggle("is-multi-round", multiRound);
+    roundLabel.hidden = !multiRound;
+    if (multiRound) {
+      roundLabel.textContent = `Round #${currentRoundNumber(player)}`;
+    }
   }
 
   function playerDisplayTotal(p, index) {
@@ -479,9 +676,17 @@
     return p.banked;
   }
 
+  function syncLeaderboardSpace() {
+    document.body.classList.toggle("has-leaderboard", gameStarted && !leaderboard.hidden);
+  }
+
   function renderLeaderboard() {
     leaderboard.hidden = !gameStarted;
-    if (!gameStarted) return;
+    syncLeaderboardSpace();
+    if (!gameStarted) {
+      leaderboardList.innerHTML = "";
+      return;
+    }
 
     const ranked = players
       .map((p, index) => ({ p, index, total: playerDisplayTotal(p, index) }))
@@ -767,21 +972,19 @@
     const wasTurkey = landed.isTurkey;
     const playerName = players[currentPlayer]?.name || "Player";
 
-    reactionCapturePromise = new Promise((resolve) => {
-      if (reactionTimer) clearTimeout(reactionTimer);
-      reactionTimer = setTimeout(() => {
-        captureReaction({
-          bust: wasTurkey,
-          label: wasTurkey ? "Bust!" : `+${formatValue(awardedValue)}`,
-          name: playerName,
-        });
-        reactionTimer = null;
-        reactionCapturePromise = null;
-        resolve();
-      }, REACTION_DELAY_MS);
-    });
+    const reactionLabel = wasTurkey ? "Bust!" : `+${formatValue(awardedValue)}`;
 
     if (wasTurkey) {
+      // Still mode: snap at 1s. Video mode: wait and record after bust ends.
+      if (isReactionVideoMode()) {
+        reactionCapturePromise = Promise.resolve();
+      } else {
+        reactionCapturePromise = scheduleStillReaction({
+          bust: true,
+          label: reactionLabel,
+          name: playerName,
+        });
+      }
       setTurnScore(0);
       turnOver = true;
       canAct = false;
@@ -793,6 +996,20 @@
       const bustPromise = playTurkeyAnimation();
       finishTurnAfterTurkey(bustPromise);
       return;
+    }
+
+    if (isReactionVideoMode()) {
+      reactionCapturePromise = captureReactionClip({
+        bust: false,
+        label: reactionLabel,
+        name: playerName,
+      });
+    } else {
+      reactionCapturePromise = scheduleStillReaction({
+        bust: false,
+        label: reactionLabel,
+        name: playerName,
+      });
     }
 
     const firePromise = playFireVideo();
@@ -807,10 +1024,51 @@
     finishPrizeAfterFire(firePromise, landed);
   }
 
+  async function flashReactionPhoto(dataUrl) {
+    if (!dataUrl || !reactionFlash || !reactionFlashImage) return;
+
+    reactionFlashImage.src = dataUrl;
+    try {
+      if (typeof reactionFlashImage.decode === "function") {
+        await reactionFlashImage.decode();
+      } else {
+        await new Promise((resolve) => {
+          if (reactionFlashImage.complete) resolve();
+          else {
+            reactionFlashImage.onload = () => resolve();
+            reactionFlashImage.onerror = () => resolve();
+          }
+        });
+      }
+    } catch (_) {
+      /* still show whatever we have */
+    }
+
+    // Cover the live camera with the stored snapshot, then enlarge that composite
+    reactionFlash.hidden = false;
+    reactionFlash.classList.add("is-on");
+    reactionFlash.setAttribute("aria-hidden", "false");
+    cameraWell.classList.add("is-reaction-flash");
+
+    await waitMs(REACTION_FLASH_MS);
+
+    cameraWell.classList.remove("is-reaction-flash");
+    reactionFlash.classList.remove("is-on");
+    reactionFlash.hidden = true;
+    reactionFlash.setAttribute("aria-hidden", "true");
+    reactionFlashImage.removeAttribute("src");
+  }
+
   async function finishPrizeAfterFire(firePromise, landed) {
     await (firePromise || fireVideoPromise || Promise.resolve());
     if (turnOver) return;
+    // Wait for the normal in-turn snap (taken during Fire!), then flip — no new capture later
+    await (reactionCapturePromise || Promise.resolve());
+    const reactionToShow = reactionDisplayUrl(players[currentPlayer]?.reactions?.at(-1));
+    if (turnOver) return;
     await playPrizeReveal(landed);
+    if (turnOver) return;
+    await flashReactionPhoto(reactionToShow);
     if (turnOver) return;
     canAct = true;
     awaitingChoice = true;
@@ -820,36 +1078,51 @@
   async function finishTurnAfterTurkey(bustPromise) {
     await (bustPromise || playTurkeyAnimation());
     const playerName = players[currentPlayer]?.name || "Player";
-    captureReaction({
-      bust: true,
-      label: "Bust!",
-      name: playerName,
-    });
-    await (reactionCapturePromise || Promise.resolve());
+    if (isReactionVideoMode()) {
+      await captureReactionClip({
+        bust: true,
+        label: "Bust!",
+        name: playerName,
+      });
+    } else {
+      captureReaction({
+        bust: true,
+        label: "Bust!",
+        name: playerName,
+      });
+      await (reactionCapturePromise || Promise.resolve());
+    }
+    const latest = players[currentPlayer]?.reactions?.at(-1);
+    const reactionToShow = latest?.dataUrl || null;
+    await flashReactionPhoto(reactionToShow);
     openEndTurnGallery("turkey");
   }
 
-  function captureReaction({ bust, label, name }) {
-    if (!camera.srcObject) return;
-
-    const w = camera.videoWidth || 640;
-    const h = camera.videoHeight || 480;
-    captureCanvas.width = w;
-    captureCanvas.height = h;
-    const ctx = captureCanvas.getContext("2d");
-
+  function drawReactionFrame(ctx, w, h) {
     ctx.save();
     ctx.translate(w, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(camera, 0, 0, w, h);
     ctx.restore();
 
-    const dataUrl = captureCanvas.toDataURL("image/jpeg", 0.85);
-    const player = players[currentPlayer];
-    if (player) {
-      player.reactions.push({ dataUrl, label, bust });
+    const banner = bannerImage.complete && bannerImage.naturalWidth ? bannerImage : cameraBorder;
+    if (banner && banner.naturalWidth) {
+      ctx.drawImage(banner, 0, 0, w, h);
     }
+  }
 
+  function grabReactionFrameDataUrl() {
+    if (!camera.srcObject) return null;
+    const w = camera.videoWidth || 640;
+    const h = camera.videoHeight || 480;
+    captureCanvas.width = w;
+    captureCanvas.height = h;
+    const ctx = captureCanvas.getContext("2d");
+    drawReactionFrame(ctx, w, h);
+    return captureCanvas.toDataURL("image/jpeg", 0.8);
+  }
+
+  function prependReactionCard(dataUrl, label, bust, name) {
     const card = document.createElement("article");
     card.className = "reaction-card" + (bust ? " is-bust" : "");
     card.innerHTML = `
@@ -860,6 +1133,103 @@
       openReactionPreview(dataUrl, `${name}-reaction.jpg`);
     });
     reactionStrip.prepend(card);
+    reactionFocusIndex = 0;
+    layoutReactionsStack();
+  }
+
+  function scheduleStillReaction({ bust, label, name }) {
+    return new Promise((resolve) => {
+      if (reactionTimer) clearTimeout(reactionTimer);
+      reactionTimer = setTimeout(() => {
+        captureReaction({ bust, label, name });
+        reactionTimer = null;
+        reactionCapturePromise = null;
+        resolve();
+      }, REACTION_DELAY_MS);
+    });
+  }
+
+  async function captureReactionClip({ bust, label, name }) {
+    if (!camera.srcObject) return;
+    const frames = [];
+    const interval = Math.round(1000 / REACTION_CLIP_FPS);
+    const frameCount = Math.max(1, Math.round(REACTION_CLIP_MS / interval));
+
+    for (let i = 0; i < frameCount; i++) {
+      const frame = grabReactionFrameDataUrl();
+      if (frame) frames.push(frame);
+      if (i < frameCount - 1) await waitMs(interval);
+    }
+
+    if (!frames.length) return;
+
+    const frameIndex = Math.min(frames.length - 1, Math.floor(frames.length / 2));
+    const dataUrl = frames[frameIndex];
+    const player = players[currentPlayer];
+    if (player) {
+      player.reactions.push({
+        dataUrl,
+        frames,
+        frameIndex,
+        isClip: true,
+        label,
+        bust,
+      });
+    }
+    prependReactionCard(dataUrl, label, bust, name);
+  }
+
+  function captureReaction({ bust, label, name }) {
+    const dataUrl = grabReactionFrameDataUrl();
+    if (!dataUrl) return;
+
+    const player = players[currentPlayer];
+    if (player) {
+      player.reactions.push({ dataUrl, label, bust });
+    }
+    prependReactionCard(dataUrl, label, bust, name);
+  }
+
+  function reactionDisplayUrl(reaction) {
+    if (!reaction) return "";
+    if (reaction.frames?.length) {
+      const idx = Math.min(
+        reaction.frames.length - 1,
+        Math.max(0, reaction.frameIndex ?? Math.floor(reaction.frames.length / 2))
+      );
+      return reaction.frames[idx] || reaction.dataUrl;
+    }
+    return reaction.dataUrl;
+  }
+
+  function setReactionFrame(reaction, index) {
+    if (!reaction?.frames?.length) return reaction?.dataUrl || "";
+    const idx = Math.min(reaction.frames.length - 1, Math.max(0, index));
+    reaction.frameIndex = idx;
+    reaction.dataUrl = reaction.frames[idx];
+    return reaction.dataUrl;
+  }
+
+  function downloadReactionWithBanner(dataUrl, filename) {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth || 640;
+      canvas.height = img.naturalHeight || 480;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      // If this snapshot was captured before banner compositing, stamp the frame on download.
+      // Fresh captures already include the banner; drawing it again is a no-op visually on opaque art.
+      const banner = bannerImage.complete && bannerImage.naturalWidth ? bannerImage : cameraBorder;
+      if (banner && banner.naturalWidth) {
+        ctx.drawImage(banner, 0, 0, canvas.width, canvas.height);
+      }
+
+      downloadDataUrl(canvas.toDataURL("image/jpeg", 0.92), filename);
+    };
+    img.onerror = () => downloadDataUrl(dataUrl, filename);
+    img.src = dataUrl;
   }
 
   function openReactionPreview(dataUrl, filename) {
@@ -898,6 +1268,7 @@
     turnOver = true;
     updateActionButton();
     await (reactionCapturePromise || Promise.resolve());
+    // Flash already happened after Fire!; bagging ends the turn
     openEndTurnGallery("bank");
   }
 
@@ -920,21 +1291,120 @@
   }
 
   function isLastPlayerTurn() {
-    return players.every((p, i) => i === endTurnPlayerIndex || p.done);
+    // After the current player finishes this turn, will the whole match be over?
+    return players.every((p, i) => {
+      const played = p.roundsPlayed || 0;
+      if (i === endTurnPlayerIndex) return played + 1 >= totalRounds;
+      return played >= totalRounds;
+    });
+  }
+
+  function prepareNextTurnBoard() {
+    clearReactionStrip();
+    hideBanner();
+    turnOver = false;
+    awaitingChoice = false;
+    spinsThisTurn = 0;
+    turnScore = 0;
+    setLit(-1);
+    buildBoard();
+  }
+
+  /** Round-robin: everyone finishes Round N before anyone starts Round N+1. */
+  function findNextPlayerIndex() {
+    const remaining = players
+      .map((p, i) => ({ i, played: p.roundsPlayed || 0 }))
+      .filter(({ played }) => played < totalRounds);
+    if (!remaining.length) return -1;
+
+    const minPlayed = Math.min(...remaining.map(({ played }) => played));
+    const sameRound = remaining.filter(({ played }) => played === minPlayed);
+    const nextInOrder = sameRound.find(({ i }) => i > endTurnPlayerIndex);
+    return (nextInOrder || sameRound[0]).i;
+  }
+
+  function advanceAfterTurn() {
+    const player = players[endTurnPlayerIndex];
+    if (!player) {
+      returnToLobby();
+      return;
+    }
+
+    player.roundsPlayed = (player.roundsPlayed || 0) + 1;
+    player.reactions = [];
+    player.done = player.roundsPlayed >= totalRounds;
+
+    prepareNextTurnBoard();
+
+    const next = findNextPlayerIndex();
+    if (next === -1) {
+      canAct = false;
+      scoreEl.textContent = formatValue(0);
+      renderLeaderboard();
+      updateActionButton();
+      if (isMultiplayer()) {
+        showWinner();
+      } else {
+        returnToLobby();
+      }
+      return;
+    }
+
+    currentPlayer = next;
+    canAct = true;
+    setTurnScore(0);
+    syncTurnHud();
+    renderLeaderboard();
+    updateActionButton();
+  }
+
+  function isFavoriteRecheck(player) {
+    return isMultiplayer() && totalRounds > 1 && (player.roundsPlayed || 0) >= 1 && !!player.favorite;
+  }
+
+  function getGalleryEntries(player) {
+    const entries = player.reactions.map((r) => ({ ...r, isPriorFavorite: false }));
+    if (isFavoriteRecheck(player)) {
+      const alreadyIn = entries.some((r) => r.dataUrl === player.favorite);
+      if (!alreadyIn) {
+        entries.unshift({
+          dataUrl: player.favorite,
+          label: "Favorite",
+          bust: false,
+          isPriorFavorite: true,
+        });
+      }
+    }
+    return entries;
   }
 
   function openEndTurnGallery(reason) {
     endTurnPlayerIndex = currentPlayer;
     const player = players[endTurnPlayerIndex];
     const multi = isMultiplayer();
-    selectedFavoriteIndex = -1;
+    const recheck = isFavoriteRecheck(player);
+    const entries = getGalleryEntries(player);
 
-    if (multi) {
+    selectedFavoriteIndex = -1;
+    if (recheck && player.favorite) {
+      const favIndex = entries.findIndex((r) => r.dataUrl === player.favorite);
+      selectedFavoriteIndex = favIndex >= 0 ? favIndex : 0;
+    }
+
+    modalTitle.classList.toggle("is-fav-prompt", recheck);
+    if (multi && recheck) {
+      modalTitle.textContent = "Would you like to select a new favorite photo?";
+      modalSubtitle.innerHTML = `
+        <span class="fav-change-hint">Selecting a new favorite will clear your current one</span>
+        <span class="end-turn-cash">${formatValue(player.banked)}</span>
+      `;
+    } else if (multi) {
       modalTitle.textContent = "Pick your favorite photo to continue";
+      modalSubtitle.innerHTML = `<span class="end-turn-cash">${formatValue(player.banked)}</span>`;
     } else {
       modalTitle.textContent = `${player.name}'s results`;
+      modalSubtitle.innerHTML = `<span class="end-turn-cash">${formatValue(player.banked)}</span>`;
     }
-    modalSubtitle.innerHTML = `<span class="end-turn-cash">${formatValue(player.banked)}</span>`;
 
     renderGalleryBody(player);
     renderGalleryActions(player);
@@ -944,14 +1414,17 @@
   function renderGalleryBody(player) {
     modalBody.classList.remove("is-winner");
     const multi = isMultiplayer();
-    if (!player.reactions.length) {
+    const entries = getGalleryEntries(player);
+    if (!entries.length) {
       modalBody.innerHTML = `<p class="modal-subtitle">No reaction photos this turn.</p>`;
       return;
     }
 
     modalBody.innerHTML = "";
-    player.reactions.forEach((r, i) => {
+    entries.forEach((r, i) => {
       const filename = `${player.name}-reaction-${i + 1}.jpg`;
+      const hasClip = Array.isArray(r.frames) && r.frames.length > 1;
+      const currentUrl = reactionDisplayUrl(r);
       const item = document.createElement("div");
       item.className = "gallery-item" + (multi && i === selectedFavoriteIndex ? " is-selected" : "");
       item.innerHTML = `
@@ -961,25 +1434,45 @@
               ? `<button type="button" class="fav-pick${i === selectedFavoriteIndex ? " is-on" : ""}" aria-label="Pick as favorite">★</button>`
               : ""
           }
-          <img src="${r.dataUrl}" alt="Reaction ${i + 1}" />
+          <img src="${currentUrl}" alt="Reaction ${i + 1}" />
           <button type="button" class="dl-circle" aria-label="Download">${DOWNLOAD_ICON_SVG}</button>
         </div>
-        <div class="g-meta"><strong>${escapeHtml(r.label)}</strong>${r.bust ? "Bust" : "Hit"}</div>
+        ${
+          hasClip
+            ? `<input type="range" class="g-scrub" min="0" max="${r.frames.length - 1}" value="${r.frameIndex ?? Math.floor(r.frames.length / 2)}" aria-label="Scrub reaction frames" />
+               <span class="g-scrub-label">Scrub for best frame</span>`
+            : ""
+        }
+        <div class="g-meta"><strong>${escapeHtml(r.label)}</strong>${r.bust ? "Bust" : r.isPriorFavorite ? "Saved" : "Hit"}</div>
       `;
-      item.querySelector("img").addEventListener("click", () => {
-        openReactionPreview(r.dataUrl, filename);
+      const img = item.querySelector("img");
+      img.addEventListener("click", () => {
+        openReactionPreview(reactionDisplayUrl(r), filename);
       });
+      if (hasClip) {
+        const scrub = item.querySelector(".g-scrub");
+        scrub.addEventListener("input", () => {
+          const url = setReactionFrame(r, Number(scrub.value));
+          img.src = url;
+          if (multi && selectedFavoriteIndex === i) {
+            // keep favorite pointing at the scrubbed frame
+            player.favorite = url;
+          }
+        });
+      }
       if (multi) {
         item.querySelector(".fav-pick").addEventListener("click", (e) => {
           e.stopPropagation();
           selectedFavoriteIndex = i;
+          // Selecting a clip as favorite uses its current scrubbed frame
+          if (r.frames?.length) setReactionFrame(r, r.frameIndex ?? 0);
           renderGalleryBody(player);
           renderGalleryActions(player);
         });
       }
       item.querySelector(".dl-circle").addEventListener("click", (e) => {
         e.stopPropagation();
-        downloadDataUrl(r.dataUrl, filename);
+        downloadReactionWithBanner(reactionDisplayUrl(r), filename);
       });
       modalBody.appendChild(item);
     });
@@ -989,71 +1482,43 @@
     modalActions.innerHTML = "";
     const multi = isMultiplayer();
     const last = isLastPlayerTurn();
+    const entries = getGalleryEntries(player);
 
     const dlAll = document.createElement("button");
     dlAll.type = "button";
     dlAll.className = "btn btn-download-all";
     dlAll.textContent = "Download All";
-    dlAll.disabled = player.reactions.length === 0;
+    dlAll.disabled = entries.length === 0;
     dlAll.addEventListener("click", () => {
-      player.reactions.forEach((r, i) => {
-        downloadDataUrl(r.dataUrl, `${player.name}-reaction-${i + 1}.jpg`);
+      entries.forEach((r, i) => {
+        downloadReactionWithBanner(reactionDisplayUrl(r), `${player.name}-reaction-${i + 1}.jpg`);
       });
     });
 
     const confirm = document.createElement("button");
     confirm.type = "button";
     confirm.className = "btn btn-confirm-fav";
-    if (!multi || last) {
+    if (last) {
       confirm.textContent = "End Game";
+    } else if (!multi) {
+      confirm.textContent = "Next Round";
     } else {
       confirm.textContent = "Next Player";
     }
-    confirm.disabled = multi && player.reactions.length > 0 && selectedFavoriteIndex < 0;
+    confirm.disabled = multi && entries.length > 0 && selectedFavoriteIndex < 0;
     confirm.addEventListener("click", () => {
-      if (multi && player.reactions.length && selectedFavoriteIndex >= 0) {
-        const fav = player.reactions[selectedFavoriteIndex].dataUrl;
+      if (multi && selectedFavoriteIndex >= 0 && entries[selectedFavoriteIndex]) {
+        const chosen = entries[selectedFavoriteIndex];
+        const fav = reactionDisplayUrl(chosen);
         player.favorite = fav;
         saveFavorite(player.name, fav);
       }
       closeModal();
-      if (!multi) {
-        returnToLobby();
-        return;
-      }
-      completePlayerTurn();
+      advanceAfterTurn();
     });
 
     modalActions.appendChild(dlAll);
     modalActions.appendChild(confirm);
-  }
-
-  function completePlayerTurn() {
-    players[endTurnPlayerIndex].done = true;
-    clearReactionStrip();
-    hideBanner();
-    turnOver = false;
-    awaitingChoice = false;
-    spinsThisTurn = 0;
-    turnScore = 0;
-    setLit(-1);
-    buildBoard();
-
-    const next = players.findIndex((p) => !p.done);
-    if (next === -1) {
-      canAct = false;
-      scoreEl.textContent = formatValue(0);
-      renderLeaderboard();
-      updateActionButton();
-      showWinner();
-      return;
-    }
-
-    currentPlayer = next;
-    scoreLabel.textContent = players[currentPlayer].name;
-    canAct = true;
-    setTurnScore(0);
-    updateActionButton();
   }
 
   function winnerPhotoFor(player, favMap) {
@@ -1127,6 +1592,8 @@
     setSoloWarning(false);
     setTurnScore(0);
     scoreLabel.textContent = "Turn";
+    scoreboard.classList.remove("is-multi-round");
+    roundLabel.hidden = true;
     clearReactionStrip();
     hideBanner();
     setLit(-1);
@@ -1144,17 +1611,18 @@
       p.reactions = [];
       p.favorite = null;
       p.done = false;
+      p.roundsPlayed = 0;
     });
     currentPlayer = 0;
     spinsThisTurn = 0;
     turnOver = false;
     awaitingChoice = false;
     canAct = true;
-    scoreLabel.textContent = players[0].name;
     clearReactionStrip();
     hideBanner();
     buildBoard();
     setTurnScore(0);
+    syncTurnHud();
     updateActionButton();
   }
 
@@ -1180,6 +1648,7 @@
         reactions: [],
         favorite: null,
         done: false,
+        roundsPlayed: 0,
       });
       renderPlayerList();
     }
@@ -1193,18 +1662,27 @@
     ensurePlayersForStart();
     soloStartArmed = false;
     setSoloWarning(false);
+    totalRounds = readTotalRounds();
+    players.forEach((p) => {
+      p.banked = 0;
+      p.reactions = [];
+      p.favorite = null;
+      p.done = false;
+      p.roundsPlayed = 0;
+    });
     gameStarted = true;
     currentPlayer = 0;
     spinsThisTurn = 0;
     turnOver = false;
     awaitingChoice = false;
     canAct = true;
-    scoreLabel.textContent = players[currentPlayer].name;
     collapsePlayersEditor();
     clearReactionStrip();
     buildBoard();
     setTurnScore(0);
+    syncSetupButtons();
     syncTurnHud();
+    renderLeaderboard();
     updateActionButton();
   }
 
@@ -1236,6 +1714,30 @@
 
   btnAddPlayers.addEventListener("click", openPlayersEditor);
   btnStartFromSetup.addEventListener("click", startGameFromSetup);
+  captureVideoToggle?.addEventListener("change", () => {
+    captureVideoToggle.setAttribute("aria-checked", captureVideoToggle.checked ? "true" : "false");
+  });
+
+  roundsTrigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleRoundsMenu();
+  });
+  roundsMenu.addEventListener("click", (e) => {
+    const opt = e.target.closest('[role="option"]');
+    if (!opt) return;
+    setSelectedRounds(Number(opt.dataset.value));
+    closeRoundsMenu();
+  });
+  document.addEventListener("click", (e) => {
+    if (!roundsPicker.contains(e.target)) closeRoundsMenu();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Escape" && !roundsMenu.hidden) {
+      closeRoundsMenu();
+      roundsTrigger.focus();
+    }
+  });
+  setSelectedRounds(1);
 
   addPlayerForm.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -1243,7 +1745,7 @@
     if (!name) return;
     soloStartArmed = false;
     setSoloWarning(false);
-    players.push({ name, banked: 0, reactions: [], favorite: null, done: false });
+    players.push({ name, banked: 0, reactions: [], favorite: null, done: false, roundsPlayed: 0 });
     playerNameInput.value = "";
     renderPlayerList();
     syncSetupButtons();
@@ -1267,12 +1769,91 @@
   });
   previewDownload.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (previewDataUrl) downloadDataUrl(previewDataUrl, previewFilename);
+    if (previewDataUrl) downloadReactionWithBanner(previewDataUrl, previewFilename);
   });
+  reactionsPrevBtn?.addEventListener("click", () => shiftReactionFocus(-1));
+  reactionsNextBtn?.addEventListener("click", () => shiftReactionFocus(1));
+  reactionsStackWrap?.addEventListener(
+    "wheel",
+    (e) => {
+      if (!getReactionCards().length) return;
+      if (isReactionsHorizontal()) {
+        if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && Math.abs(e.deltaY) > 2) {
+          e.preventDefault();
+          reactionsStackWrap.scrollLeft += e.deltaY;
+          updateReactionsNav();
+        }
+        return;
+      }
+      e.preventDefault();
+      if (Math.abs(e.deltaY) < 2) return;
+      const now = performance.now();
+      if (now < reactionWheelLockUntil) return;
+      reactionWheelLockUntil = now + 140;
+      shiftReactionFocus(e.deltaY > 0 ? 1 : -1);
+    },
+    { passive: false }
+  );
+  reactionsStackWrap?.addEventListener("scroll", () => {
+    if (isReactionsHorizontal()) updateReactionsNav();
+  });
+  let reactionTouchStartY = null;
+  reactionsStackWrap?.addEventListener(
+    "touchstart",
+    (e) => {
+      if (isReactionsHorizontal()) return;
+      reactionTouchStartY = e.touches[0]?.clientY ?? null;
+    },
+    { passive: true }
+  );
+  reactionsStackWrap?.addEventListener(
+    "touchend",
+    (e) => {
+      if (isReactionsHorizontal() || reactionTouchStartY == null) return;
+      const endY = e.changedTouches[0]?.clientY;
+      if (endY == null) {
+        reactionTouchStartY = null;
+        return;
+      }
+      const dy = endY - reactionTouchStartY;
+      reactionTouchStartY = null;
+      if (Math.abs(dy) < 36) return;
+      shiftReactionFocus(dy < 0 ? 1 : -1);
+    },
+    { passive: true }
+  );
+  const onReactionsLayoutChange = () => layoutReactionsStack();
+  if (typeof reactionsLayoutQuery.addEventListener === "function") {
+    reactionsLayoutQuery.addEventListener("change", onReactionsLayoutChange);
+  } else {
+    reactionsLayoutQuery.addListener(onReactionsLayoutChange);
+  }
+  window.addEventListener("resize", () => {
+    layoutReactionsStack();
+  });
+  layoutReactionsStack();
   window.addEventListener("keydown", (e) => {
     if (e.code === "Escape" && !previewModal.hidden) {
       closeReactionPreview();
       return;
+    }
+    if (!previewModal.hidden || !modalRoot.hidden) return;
+    if (isReactionsHorizontal()) {
+      if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        shiftReactionFocus(-1);
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        shiftReactionFocus(1);
+      }
+      return;
+    }
+    if (e.code === "ArrowUp") {
+      e.preventDefault();
+      shiftReactionFocus(-1);
+    } else if (e.code === "ArrowDown") {
+      e.preventDefault();
+      shiftReactionFocus(1);
     }
   });
 

@@ -29,6 +29,38 @@
     <section id="setup-panel" class="setup-panel">
       <div class="setup-actions">
         <button id="btn-add-players" class="btn btn-players" type="button">Add Players</button>
+        <div class="rounds-picker" id="rounds-picker">
+          <span class="rounds-picker-label">Rounds</span>
+          <div class="rounds-control">
+            <button
+              type="button"
+              id="rounds-trigger"
+              class="rounds-trigger"
+              aria-label="Number of rounds"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+              aria-controls="rounds-menu"
+            >
+              <span id="rounds-trigger-value">1</span>
+              <span class="rounds-caret" aria-hidden="true"></span>
+            </button>
+            <ul id="rounds-menu" class="rounds-menu" role="listbox" hidden>
+              <li role="option" tabindex="-1" data-value="1" aria-selected="true">1</li>
+              <li role="option" tabindex="-1" data-value="3" aria-selected="false">3</li>
+              <li role="option" tabindex="-1" data-value="5" aria-selected="false">5</li>
+            </ul>
+          </div>
+        </div>
+        <label class="capture-mode-toggle" for="capture-video-toggle">
+          <input
+            id="capture-video-toggle"
+            type="checkbox"
+            role="switch"
+            aria-checked="false"
+          />
+          <span class="capture-mode-radio" aria-hidden="true"></span>
+          <span class="capture-mode-text">Reaction Video</span>
+        </label>
         <button id="btn-done-players" class="btn btn-start-game" type="button" hidden>Done</button>
       </div>
       <div id="players-editor" class="players-editor" hidden>
@@ -43,59 +75,87 @@
     </section>
 
     <div id="turn-hud" class="turn-hud" hidden>
-      <div class="scoreboard" aria-live="polite">
-        <span class="score-label" id="score-label">Turn</span>
-        <span id="score" class="score-value">$0</span>
+      <div class="scoreboard" id="scoreboard" aria-live="polite">
+        <span id="round-label" class="round-label" hidden>Round #1</span>
+        <div class="scoreboard-line">
+          <span class="score-label" id="score-label">Turn</span>
+          <span id="score" class="score-value">$0</span>
+        </div>
       </div>
     </div>
 
-    <div class="board-frame">
-      <div id="board-lights" class="board-lights" aria-hidden="true"></div>
-      <main class="board" id="board" aria-label="Prize board">
-        <div class="camera-well">
-          <video id="camera" autoplay playsinline muted></video>
-          <canvas id="capture" hidden></canvas>
-          <img
-            class="camera-border"
-            src="assets/camera-border.png"
-            alt=""
-            aria-hidden="true"
-          />
-          <div id="turkey-blast" class="turkey-blast" hidden aria-hidden="true">
-            <video
-              id="fire-video"
-              class="overlay-video"
-              src="assets/turkey-trouble-fire.mp4"
-              playsinline
-              preload="auto"
-            ></video>
-            <video
-              id="bust-video"
-              class="overlay-video"
-              src="assets/turkey-bangers.mp4"
-              playsinline
-              preload="auto"
-            ></video>
-          </div>
-          <div id="camera-status" class="camera-status">Starting camera…</div>
-          <div id="fire-hit" class="fire-hit" hidden aria-hidden="true"></div>
-          <div id="result-banner" class="result-banner" hidden></div>
+    <div class="board-row">
+      <aside class="reactions-panel" aria-label="Reaction photos">
+        <h2 class="reactions-title">Reactions</h2>
+        <button
+          type="button"
+          id="reactions-prev"
+          class="reactions-nav reactions-nav-prev"
+          aria-label="Previous reaction"
+        >
+          ▲
+        </button>
+        <div class="reactions-stack-wrap">
+          <div id="reaction-strip" class="reactions-stack"></div>
         </div>
-      </main>
+        <button
+          type="button"
+          id="reactions-next"
+          class="reactions-nav reactions-nav-next"
+          aria-label="Next reaction"
+        >
+          ▼
+        </button>
+      </aside>
+
+      <div class="board-column">
+        <div class="board-frame">
+          <div id="board-lights" class="board-lights" aria-hidden="true"></div>
+          <main class="board" id="board" aria-label="Prize board">
+            <div class="camera-well">
+              <video id="camera" autoplay playsinline muted></video>
+              <canvas id="capture" hidden></canvas>
+              <img
+                class="camera-border"
+                src="assets/camera-border.png"
+                alt=""
+                aria-hidden="true"
+              />
+              <div id="turkey-blast" class="turkey-blast" hidden aria-hidden="true">
+                <video
+                  id="fire-video"
+                  class="overlay-video"
+                  src="assets/turkey-trouble-fire.mp4"
+                  playsinline
+                  preload="auto"
+                ></video>
+                <video
+                  id="bust-video"
+                  class="overlay-video"
+                  src="assets/turkey-bangers.mp4"
+                  playsinline
+                  preload="auto"
+                ></video>
+              </div>
+              <div id="camera-status" class="camera-status">Starting camera…</div>
+              <div id="fire-hit" class="fire-hit" hidden aria-hidden="true"></div>
+              <div id="reaction-flash" class="reaction-flash" hidden aria-hidden="true">
+                <img id="reaction-flash-image" class="reaction-flash-image" alt="Latest reaction" />
+              </div>
+              <div id="result-banner" class="result-banner" hidden></div>
+            </div>
+          </main>
+        </div>
+
+        <section id="controls" class="controls">
+          <button id="btn-action" class="btn btn-action is-start" type="button">Pull!</button>
+          <button id="btn-bank" class="btn btn-bank is-slot-hidden" type="button" disabled>Bag Cash</button>
+          <p id="solo-warning" class="solo-warning" hidden>
+            You're about to start a single player game. Press <strong class="solo-pull">Pull!</strong> again to begin.
+          </p>
+        </section>
+      </div>
     </div>
-
-    <section id="controls" class="controls">
-      <button id="btn-action" class="btn btn-action is-start" type="button">Pull!</button>
-      <button id="btn-bank" class="btn btn-bank is-slot-hidden" type="button" disabled>Bag Cash</button>
-      <p id="solo-warning" class="solo-warning" hidden>
-        You're about to start a single player game. Press <strong class="solo-pull">Pull!</strong> again to begin.
-      </p>
-    </section>
-
-    <section class="reactions" aria-label="Reaction photos">
-      <h2 class="reactions-title">Reactions</h2>
-      <div id="reaction-strip" class="reaction-strip"></div>
-    </section>
   </div>
 
   <aside id="leaderboard" class="leaderboard" hidden aria-label="Scoreboard">
