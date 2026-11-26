@@ -1760,6 +1760,11 @@ body {
   border-color: var(--gold-hot);
 }
 
+.reaction-shot {
+  position: relative;
+  line-height: 0;
+}
+
 .reaction-card img {
   display: block;
   width: 100%;
@@ -1768,16 +1773,93 @@ body {
 }
 
 /* Crisp PNG border over camera-only captures (not baked into JPEGs) */
-.reaction-card::before {
+.reaction-shot::before {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
+  inset: 0;
   z-index: 1;
-  aspect-ratio: 1;
   pointer-events: none;
   background: url("assets/camera-border.png") center / 100% 100% no-repeat;
+}
+
+.reaction-hud {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.reaction-hud-spin {
+  position: absolute;
+  top: 8.5%;
+  left: 8.5%;
+  max-width: 70%;
+  font-family: Bangers, cursive;
+  font-size: clamp(0.85rem, 5.2vw, 1.55rem);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--gold);
+  text-shadow:
+    0 1px 0 #000,
+    0 0 6px rgba(0, 0, 0, 0.85),
+    1px 1px 0 rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reaction-hud-spin.is-bust {
+  color: var(--turkey-glow);
+}
+
+.reaction-hud-stats {
+  position: absolute;
+  left: 8.5%;
+  bottom: 8.5%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: clamp(0.62rem, 3.4vw, 0.95rem);
+  line-height: 1;
+  color: var(--gold);
+  text-shadow:
+    0 1px 0 #000,
+    0 0 5px rgba(0, 0, 0, 0.85),
+    1px 1px 0 rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+
+.reaction-hud-hits {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22em;
+}
+
+.reaction-hud-hits .lb-hits-icon {
+  width: 0.95em;
+  height: 0.95em;
+}
+
+.reaction-card .reaction-hud-spin {
+  font-size: clamp(0.72rem, 2.1vw, 1.05rem);
+}
+
+.reaction-card .reaction-hud-stats {
+  font-size: clamp(0.55rem, 1.5vw, 0.78rem);
+}
+
+.gallery-item .reaction-hud-spin {
+  font-size: clamp(0.95rem, 3.2vw, 1.45rem);
+}
+
+.gallery-item .reaction-hud-stats {
+  font-size: clamp(0.68rem, 2.2vw, 0.95rem);
+}
+
+.gallery-item:has(.fav-pick) .reaction-hud-spin {
+  top: 2.35rem;
 }
 
 .reaction-card .meta {
@@ -2257,6 +2339,19 @@ body {
   pointer-events: none;
   border-radius: 12px;
   background: url("assets/camera-border.png") center / 100% 100% no-repeat;
+}
+
+.preview-frame .reaction-hud {
+  z-index: 2;
+  border-radius: 12px;
+}
+
+.preview-frame .reaction-hud-spin {
+  font-size: clamp(1.15rem, 4.5vw, 2rem);
+}
+
+.preview-frame .reaction-hud-stats {
+  font-size: clamp(0.8rem, 2.8vw, 1.15rem);
 }
 
 .preview-image {
