@@ -3160,7 +3160,55 @@
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
   }
 
+  /**
+   * Blob-URL game shells (BBV iframe) can't reliably use <a download>.
+   * Hand the file to the host page when embedded.
+   */
+  function requestHostDownload(payload) {
+    try {
+      if (!window.parent || window.parent === window) return false;
+      window.parent.postMessage(
+        { source: "turkey-trouble", type: "download", ...payload },
+        "*",
+        payload.buffer ? [payload.buffer] : []
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function downloadBlob(blob, filename) {
+    if (blob && typeof blob.arrayBuffer === "function") {
+      blob.arrayBuffer().then((buffer) => {
+        if (
+          requestHostDownload({
+            filename,
+            mime: blob.type || "application/octet-stream",
+            buffer,
+          })
+        ) {
+          return;
+        }
+        const url = URL.createObjectURL(new Blob([buffer], { type: blob.type }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+      }).catch(() => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+      });
+      return;
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -3344,10 +3392,14 @@
   }
 
   function downloadDataUrl(dataUrl, filename) {
+    if (requestHostDownload({ filename, dataUrl })) return;
     const a = document.createElement("a");
     a.href = dataUrl;
     a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
     a.click();
+    a.remove();
   }
 
   function closeModal() {
