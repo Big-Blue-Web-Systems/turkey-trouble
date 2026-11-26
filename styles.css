@@ -45,12 +45,15 @@ body {
 .stage {
   width: 100%;
   max-width: none;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
 }
 
 .board-row {
+  /* Frame ring around the board: pad holds bulbs outside the border.
+     fitPlayArea keeps --board-pad >= --bulb-radius + --bulb-clearance + 4px. */
   --board-pad: 1.5rem;
   --bulb-clearance: 0.45rem;
   --bulb-radius: 0.575rem;
@@ -997,19 +1000,24 @@ body {
   grid-column: 2;
   grid-row: 1;
   position: relative;
+  /* One unit: padding ring + lights + bordered board — never clip the bulbs.
+     Do NOT set container-type here: size containment collapses max-content
+     width and squishes the light ring into the board border. */
+  overflow: visible;
   width: max-content;
   min-width: 0;
   max-width: 100%;
-  margin-inline: 0;
+  margin-inline: auto;
   margin-top: var(--frame-margin-top);
   margin-bottom: var(--frame-margin-bottom);
   padding: var(--board-pad);
-  justify-self: start;
+  justify-self: center;
+  box-sizing: border-box;
 }
 
 .board-cheat-overlay {
   position: absolute;
-  inset: var(--board-pad);
+  inset: 0;
   z-index: 40;
   display: flex;
   align-items: center;
@@ -1028,7 +1036,7 @@ body {
 .board-cheat-msg {
   margin: 0;
   font-family: Bangers, cursive;
-  font-size: clamp(1.8rem, 6vw, 3rem);
+  font-size: clamp(1.35rem, 9cqi, 3rem);
   letter-spacing: 0.1em;
   color: var(--gold-hot);
   text-align: center;
@@ -1056,11 +1064,13 @@ body {
 }
 
 .board-lights {
-  /* Sit outside the board with clear padding before the border */
+  /* Locked to the board: centers sit (radius + clearance) outside the board edge,
+     which stays inside the frame pad ring. Do not override pad/clearance independently. */
   position: absolute;
   inset: calc(var(--board-pad) - var(--bulb-radius) - var(--bulb-clearance));
   pointer-events: none;
   z-index: 4;
+  overflow: visible;
 }
 
 .board-bulb {
@@ -1098,6 +1108,7 @@ body {
   --tile-w: var(--fit-tile-w);
   --tile-h: calc(var(--tile-w) * 3 / 5); /* 5:3 — every tile */
 
+  position: relative;
   box-sizing: border-box;
   width: max-content;
   max-width: 100%;
@@ -1113,6 +1124,8 @@ body {
   box-shadow:
     inset 0 0 40px rgba(0, 0, 0, 0.45),
     0 12px 40px rgba(0, 0, 0, 0.4);
+  /* Cheat banner cqi — safe here because tile grid gives a definite size */
+  container-type: inline-size;
 }
 
 .tile {
@@ -1401,10 +1414,10 @@ body {
   bottom: 12%;
   z-index: 4;
   transform: translateX(-50%);
-  padding: 0.55rem 1.1rem;
+  padding: clamp(0.35rem, 3.5cqi, 0.55rem) clamp(0.55rem, 6cqi, 1.1rem);
   border-radius: 999px;
   font-family: Bangers, cursive;
-  font-size: clamp(1.2rem, 4vw, 1.8rem);
+  font-size: clamp(0.95rem, 11cqi, 1.8rem);
   letter-spacing: 0.12em;
   background: rgba(20, 10, 6, 0.88);
   border: 2px solid var(--gold);
@@ -1430,11 +1443,11 @@ body {
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem 0.55rem;
+  gap: 0.15rem clamp(0.35rem, 3cqi, 0.55rem);
   box-sizing: border-box;
-  width: calc(100% - 1.1rem);
+  width: calc(100% - 0.75rem);
   max-width: none;
-  padding: 0.5rem 0.75rem;
+  padding: clamp(0.4rem, 3.5cqi, 0.55rem) clamp(0.5rem, 4cqi, 0.75rem);
   border-radius: 12px;
   white-space: normal;
   text-align: center;
@@ -1445,7 +1458,7 @@ body {
 .result-banner.is-centered .banner-title {
   display: inline;
   font-family: Bangers, cursive;
-  font-size: clamp(0.95rem, 3.4cqi, 1.35rem);
+  font-size: clamp(0.85rem, 8.5cqi, 1.35rem);
   letter-spacing: 0.08em;
   line-height: 1.15;
   color: #ffb4b4;
@@ -1455,7 +1468,7 @@ body {
 .result-banner.is-centered .banner-sep {
   display: inline;
   font-family: "Space Grotesk", system-ui, sans-serif;
-  font-size: clamp(0.7rem, 2.4cqi, 0.85rem);
+  font-size: clamp(0.62rem, 5.5cqi, 0.85rem);
   color: rgba(240, 210, 200, 0.55);
   line-height: 1;
 }
@@ -1463,7 +1476,7 @@ body {
 .result-banner.is-centered .banner-sub {
   display: inline;
   font-family: "Space Grotesk", system-ui, sans-serif;
-  font-size: clamp(0.68rem, 2.4cqi, 0.85rem);
+  font-size: clamp(0.62rem, 5.5cqi, 0.85rem);
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1.2;
@@ -1474,7 +1487,7 @@ body {
 .result-banner .banner-title {
   display: block;
   font-family: Bangers, cursive;
-  font-size: clamp(1.35rem, 4.2vw, 2rem);
+  font-size: clamp(1.05rem, 12cqi, 2rem);
   letter-spacing: 0.1em;
   line-height: 1.1;
   color: #ffb4b4;
@@ -1484,7 +1497,7 @@ body {
 .result-banner .banner-sub {
   display: block;
   font-family: "Space Grotesk", system-ui, sans-serif;
-  font-size: clamp(0.78rem, 2.2vw, 0.95rem);
+  font-size: clamp(0.7rem, 6.5cqi, 0.95rem);
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1.3;
@@ -1765,7 +1778,8 @@ body {
 @media (max-width: 760px) {
   body {
     padding-block: 0.75rem;
-    padding-inline: clamp(0.85rem, 3.5vw, 1.35rem);
+    /* Room for bulb glow outside the light ring / full-width buttons */
+    padding-inline: clamp(0.55rem, 2.4vw, 0.85rem);
   }
 
   .setup-actions {
@@ -1802,42 +1816,70 @@ body {
   }
 
   .board-row {
-    --board-pad: 1.1rem;
+    /* Keep default --board-pad / bulb vars — fitPlayArea owns the frame ring */
+    --frame-margin-top: 0.2rem;
+    --frame-margin-bottom: 0.35rem;
     display: flex;
     flex-direction: column;
-    align-items: stretch;
-    width: max-content;
+    align-items: center;
+    width: 100%;
     max-width: 100%;
-    margin-inline: auto;
+    min-width: 0;
+    margin-inline: 0;
+    /* Don't clip bulb glow — min-width: 0 on children stops the left-shift overflow */
+    overflow-x: visible;
   }
 
   .board-column {
     display: flex;
     flex-direction: column;
-    align-items: stretch;
+    align-items: center;
     order: 1;
-    width: max-content;
+    width: 100%;
     max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
 
   .board-frame {
     grid-column: auto;
     grid-row: auto;
     margin-block: 0.35rem 0.45rem;
-    margin-inline: 0;
+    margin-inline: auto;
+    width: max-content;
+    max-width: 100%;
   }
 
   .controls {
     grid-column: auto;
     grid-row: auto;
+    grid-template-columns: 1fr;
+    align-self: stretch;
+    width: 100%;
+    max-width: none;
     margin-top: 0.85rem;
+    margin-left: 0;
+    margin-right: 0;
+    gap: 0.55rem;
+  }
+
+  .controls .btn-action,
+  .controls .btn-bank {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Don't leave an empty stacked row when Bag Cash is hidden */
+  .btn-bank.is-slot-hidden {
+    display: none;
   }
 
   .reactions-panel {
     order: 2;
     flex: none;
-    width: auto;
-    max-width: none;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     height: auto;
     max-height: none;
     margin-block: 0;
@@ -1848,6 +1890,7 @@ body {
     gap: 0.45rem;
     padding: 0.35rem 0 0.2rem;
     align-self: stretch;
+    box-sizing: border-box;
   }
 
   .reactions-nav-prev {
@@ -1860,11 +1903,12 @@ body {
 
   .reactions-stack-wrap {
     order: 1;
-    flex: 1 1 auto;
+    flex: 1 1 0;
     width: auto;
     height: auto;
     min-height: 72px;
     min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
     overflow-y: hidden;
     touch-action: pan-x;
@@ -1924,12 +1968,14 @@ body {
     order: 3;
     grid-column: auto;
     grid-row: auto;
-    width: auto;
-    max-width: none;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     align-self: stretch;
     justify-self: auto;
     margin: 0.35rem 0 0;
     max-height: none;
+    box-sizing: border-box;
   }
 }
 
@@ -2051,16 +2097,17 @@ body {
   z-index: 9;
   transform: translate(-50%, -50%);
   font-family: Bangers, cursive;
-  font-size: clamp(1.35rem, 3.8vw, 2.15rem);
+  /* Scale with the camera well (container), not the viewport */
+  font-size: clamp(1.05rem, 14cqi, 2.15rem);
   letter-spacing: 0.12em;
   color: #ffe566;
   text-shadow:
     0 0 2px #3a1800,
-    3px 3px 0 #3a1800,
-    -2px -2px 0 #3a1800,
-    2px -2px 0 #3a1800,
-    -2px 2px 0 #3a1800,
-    0 0 18px rgba(255, 200, 40, 0.75);
+    0.08em 0.08em 0 #3a1800,
+    -0.05em -0.05em 0 #3a1800,
+    0.05em -0.05em 0 #3a1800,
+    -0.05em 0.05em 0 #3a1800,
+    0 0 0.5em rgba(255, 200, 40, 0.75);
   white-space: nowrap;
   text-align: center;
   pointer-events: none;
@@ -2653,7 +2700,7 @@ body {
 @media (max-width: 560px) {
   body {
     padding-block: 0.55rem;
-    padding-inline: clamp(0.75rem, 4vw, 1.1rem);
+    padding-inline: clamp(0.5rem, 2.2vw, 0.75rem);
   }
 
   .top-bar {
@@ -2670,6 +2717,10 @@ body {
   }
 
   .controls {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
+  }
+
+  .brand-logo {
+    width: min(735px, 88vw, 32dvh);
   }
 }

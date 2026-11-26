@@ -524,12 +524,12 @@
 
   /** Full clear without a bust — accuse, then unflip 4 scattered tiles at a time with triple flips. */
   async function showBoardClearedCheatMoment() {
-    const frame = board.closest(".board-frame") || board;
     const overlay = document.createElement("div");
     overlay.className = "board-cheat-overlay";
     overlay.setAttribute("role", "status");
     overlay.innerHTML = `<p class="board-cheat-msg">Are you cheating?</p>`;
-    frame.appendChild(overlay);
+    // On .board (not .board-frame) so container queries don't size-contain the light ring
+    board.appendChild(overlay);
     await waitMs(3000);
 
     const remaining = tiles
@@ -3732,6 +3732,7 @@
   );
   const boardRow = document.querySelector(".board-row");
   const boardFrame = document.querySelector(".board-frame");
+  const boardColumn = document.querySelector(".board-column");
   const reactionsPanel = document.querySelector(".reactions-panel");
   const stageEl = document.querySelector(".stage");
 
@@ -3768,6 +3769,8 @@
     const safety = 6;
     const horizontal = isReactionsHorizontal();
     const stageW = stageEl?.clientWidth || document.documentElement.clientWidth;
+    // Mobile: match the full-width Start / Pull / Fire button edge-to-edge
+    const columnW = boardColumn?.clientWidth || stageW;
     const viewportH = window.visualViewport?.height || window.innerHeight;
     const rowTop = boardRow.getBoundingClientRect().top;
 
@@ -3779,12 +3782,19 @@
 
     for (let i = 0; i < 5; i++) {
       gap = Math.max(4.5, Math.min(8, tileW * 0.04));
-      pad = Math.max(10, Math.min(28, tileW * 0.11));
+      // Frame ring (lights + clearance outside board border) is locked to the board —
+      // never shrink pad to chase edge-to-edge width; body padding handles that.
+      const bulbR = Math.max(6, Math.min(12, tileW * 0.045));
+      const bulbClear = Math.max(5, Math.min(10, tileW * 0.035));
+      const minFramePad = bulbR + bulbClear + 4;
+      pad = Math.max(minFramePad, Math.max(10, Math.min(28, tileW * 0.11)));
       const reactionsW = horizontal
         ? 0
         : Math.min(240, Math.max(72, tileW * 0.92));
       const sideGutter = horizontal ? 0 : reactionsW + colGap;
-      const availableFrameW = Math.max(160, stageW - 2 * sideGutter);
+      const availableFrameW = horizontal
+        ? Math.max(160, columnW)
+        : Math.max(160, stageW - 2 * sideGutter);
       const availableBoardW = Math.max(140, availableFrameW - 2 * pad);
 
       let reservedBelow =
@@ -3797,7 +3807,11 @@
 
       const tileFromW = (availableBoardW - border - 5 * gap) / 4;
       const tileFromH = (availableBoardH - border - 5 * gap) / (4 * (3 / 5));
-      const next = Math.max(48, Math.min(tileFromW, tileFromH));
+      // Mobile: fill column width so the light ring lines up with the Start button.
+      // Desktop: still fit width + height in the viewport.
+      const next = horizontal
+        ? Math.max(48, tileFromW)
+        : Math.max(48, Math.min(tileFromW, tileFromH));
       boardInnerW = 4 * next + 5 * gap + border;
       if (Math.abs(next - tileW) < 0.25) {
         tileW = next;
@@ -3807,10 +3821,14 @@
     }
 
     gap = Math.max(4.5, Math.min(8, tileW * 0.04));
-    pad = Math.max(10, Math.min(28, tileW * 0.11));
-    boardInnerW = 4 * tileW + 5 * gap + border;
     const bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
     const bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
+    // Inseparable: pad ≥ bulb radius + clearance + buffer so lights never meet the border
+    pad = Math.max(
+      bulbRadius + bulbClearance + 4,
+      Math.max(10, Math.min(28, tileW * 0.11))
+    );
+    boardInnerW = 4 * tileW + 5 * gap + border;
     const reactionsCol = Math.min(240, Math.max(72, tileW * 0.92));
 
     boardRow.style.setProperty("--fit-tile-w", `${tileW.toFixed(2)}px`);
