@@ -2613,7 +2613,10 @@
     const score = formatValue(Math.max(0, Math.round(Number(reaction.score) || 0)));
     const hits = Math.max(0, Math.floor(Number(reaction.hits) || 0));
     const spinClass = reaction.bust ? "reaction-hud-spin is-bust" : "reaction-hud-spin";
-    return `<div class="${spinClass}">${label}</div>
+    const bustIcon = reaction.bust
+      ? `<img class="reaction-hud-bust-icon" src="assets/turkey-tile.png" alt="" aria-hidden="true" draggable="false" />`
+      : "";
+    return `<div class="${spinClass}">${bustIcon}<span class="reaction-hud-spin-label">${label}</span></div>
       <div class="reaction-hud-stats">
         <span class="reaction-hud-score">${score}</span>
         <span class="reaction-hud-hits"><span class="lb-hits-icon"></span>${hits}</span>
@@ -2654,32 +2657,43 @@
     frame.insertAdjacentHTML("beforeend", reactionOverlayHtml(reaction));
   }
 
-  /** Preload crosshair for canvas stamps (same asset as leaderboard hits). */
+  /** Preload HUD icons for canvas stamps (crosshair + Turkey Tom head). */
   const hitsIconImage = new Image();
   hitsIconImage.crossOrigin = "anonymous";
   hitsIconImage.decoding = "async";
   hitsIconImage.src = "assets/crosshair-hit.png";
 
-  function ensureHitsIconLoaded() {
-    if (hitsIconImage.complete && hitsIconImage.naturalWidth) {
-      return Promise.resolve(true);
-    }
+  const turkeyTomHeadImage = new Image();
+  turkeyTomHeadImage.crossOrigin = "anonymous";
+  turkeyTomHeadImage.decoding = "async";
+  turkeyTomHeadImage.src = "assets/turkey-tile.png";
+
+  function ensureIconImageLoaded(img, fallbackSrc) {
+    if (img.complete && img.naturalWidth) return Promise.resolve(true);
     return new Promise((resolve) => {
-      const done = () => resolve(!!(hitsIconImage.complete && hitsIconImage.naturalWidth));
-      hitsIconImage.addEventListener("load", done, { once: true });
-      hitsIconImage.addEventListener("error", done, { once: true });
-      // Re-kick decode in case the first attempt raced
-      if (!hitsIconImage.src) {
-        hitsIconImage.crossOrigin = "anonymous";
-        hitsIconImage.src = "assets/crosshair-hit.png";
+      const done = () => resolve(!!(img.complete && img.naturalWidth));
+      img.addEventListener("load", done, { once: true });
+      img.addEventListener("error", done, { once: true });
+      if (!img.src) {
+        img.crossOrigin = "anonymous";
+        img.src = fallbackSrc;
       }
     });
   }
 
-  /** Gold crosshair + contour drop-shadow matching .reaction-hud-stats CSS filters. */
-  function drawGoldHitsIcon(ctx, x, y, size) {
-    const icon = hitsIconImage;
-    if (!icon.complete || !icon.naturalWidth) return;
+  function ensureHitsIconLoaded() {
+    return Promise.all([
+      ensureIconImageLoaded(hitsIconImage, "assets/crosshair-hit.png"),
+      ensureIconImageLoaded(turkeyTomHeadImage, "assets/turkey-tile.png"),
+    ]).then((ok) => ok.every(Boolean));
+  }
+
+  /**
+   * Contour drop-shadow matching .reaction-hud CSS filters, then the glyph/image.
+   * @param {{ tint?: string }} [opts] — if tint is set, colorize the glyph (hits icon).
+   */
+  function drawContourDropShadowIcon(ctx, icon, x, y, size, opts = {}) {
+    if (!icon?.complete || !icon.naturalWidth) return;
 
     const makeTinted = (color) => {
       const oc = document.createElement("canvas");
@@ -2695,8 +2709,12 @@
     };
 
     const black = makeTinted("#000000");
-    const gold = makeTinted("#f0b429");
-    if (!black || !gold) return;
+    if (!black) return;
+    let face = null;
+    if (opts.tint) {
+      face = makeTinted(opts.tint);
+      if (!face) return;
+    }
 
     // CSS: drop-shadow(0 2px 3px) / (0 4px 12px) / (0 8px 28px) — scaled to icon size
     const layers = [
@@ -2710,7 +2728,6 @@
       ctx.save();
       ctx.globalAlpha = layer.a;
       if (typeof ctx.filter === "string") {
-        // Soft silhouette under the glyph — same idea as CSS filter: drop-shadow
         ctx.filter = `blur(${layer.blur}px)`;
         ctx.drawImage(black, x, y + layer.oy);
       } else {
@@ -2728,8 +2745,19 @@
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
-    ctx.drawImage(gold, x, y);
+    if (face) ctx.drawImage(face, x, y);
+    else ctx.drawImage(icon, x, y, size, size);
     ctx.restore();
+  }
+
+  /** Gold crosshair + contour drop-shadow matching .reaction-hud-stats CSS filters. */
+  function drawGoldHitsIcon(ctx, x, y, size) {
+    drawContourDropShadowIcon(ctx, hitsIconImage, x, y, size, { tint: "#f0b429" });
+  }
+
+  /** Turkey Tom head before bust label — same contour drop-shadow as HUD text. */
+  function drawTurkeyTomBustIcon(ctx, x, y, size) {
+    drawContourDropShadowIcon(ctx, turkeyTomHeadImage, x, y, size);
   }
 
   function strokeFillText(ctx, text, x, y) {
@@ -2766,7 +2794,21 @@
     if (label) {
       ctx.font = `${spinPx}px Bangers, cursive`;
       ctx.fillStyle = reaction.bust ? "#e85a45" : "#f0b429";
-      strokeFillText(ctx, label, padX, padTop);
+      let textX = padX;
+      if (reaction.bust) {
+        const headSize = Math.round(spinPx * 1.15);
+        const headY = padTop + Math.round((spinPx - headSize) / 2);
+        // Temporarily clear text shadow so icon uses its own contour layers
+        const prevBlur = ctx.shadowBlur;
+        const prevOy = ctx.shadowOffsetY;
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+        drawTurkeyTomBustIcon(ctx, padX, headY, headSize);
+        ctx.shadowBlur = prevBlur;
+        ctx.shadowOffsetY = prevOy;
+        textX = padX + headSize + Math.round(spinPx * 0.28);
+      }
+      strokeFillText(ctx, label, textX, padTop);
     }
 
     const scoreText = formatValue(scoreN);

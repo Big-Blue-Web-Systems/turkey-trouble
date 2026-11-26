@@ -1844,18 +1844,36 @@ body {
   position: absolute;
   top: 8.5%;
   left: 8.5%;
-  max-width: 70%;
+  max-width: 78%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28em;
   font-family: Bangers, cursive;
   font-size: clamp(0.85rem, 5.2vw, 1.55rem);
   line-height: 1;
   letter-spacing: 0.02em;
   color: var(--gold);
-  /* drop-shadow follows glyph alpha — text-shadow + overflow:hidden made a square blob */
+  /* drop-shadow follows glyph/icon alpha — text-shadow + overflow:hidden made a square blob */
   filter:
     drop-shadow(0 2px 3px rgba(0, 0, 0, 1))
     drop-shadow(0 4px 12px rgba(0, 0, 0, 0.95))
     drop-shadow(0 8px 28px rgba(0, 0, 0, 0.85));
   white-space: nowrap;
+}
+
+.reaction-hud-spin-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reaction-hud-bust-icon {
+  display: block;
+  width: 1.15em;
+  height: 1.15em;
+  flex-shrink: 0;
+  object-fit: contain;
+  /* Parent .reaction-hud-spin filter already applies the contour drop-shadow */
 }
 
 .reaction-hud-spin.is-bust {
