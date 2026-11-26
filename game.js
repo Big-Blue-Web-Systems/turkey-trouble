@@ -2355,12 +2355,24 @@
     if (!dataUrl) return;
 
     const frames = reaction?.frames;
-    const hasMeaningfulAudio = !!reaction?.flashTrim;
-    const playClip =
-      isReactionVideoMode() &&
-      hasMeaningfulAudio &&
-      Array.isArray(frames) &&
-      frames.length > 1;
+    const hasClipFrames = Array.isArray(frames) && frames.length > 1;
+    // Prefer mic-spike trim; if analysis missed (common on quiet mobile mics), still slow-mo a mid window
+    if (trimToSpike && hasClipFrames && reaction && !reaction.flashTrim) {
+      const span = Math.min(
+        frames.length,
+        Math.max(3, Math.ceil(FLASH_SPIKE_MIN_SEC * REACTION_CLIP_FPS))
+      );
+      const startFrame = Math.max(0, Math.floor((frames.length - span) / 2));
+      const endFrame = Math.min(frames.length, startFrame + span);
+      reaction.flashTrim = {
+        startSec: startFrame / REACTION_CLIP_FPS,
+        endSec: endFrame / REACTION_CLIP_FPS,
+        startFrame,
+        endFrame,
+        peakIdx: startFrame,
+      };
+    }
+    const playClip = isReactionVideoMode() && hasClipFrames;
 
     // Cover the live camera with the stored snapshot, then enlarge that composite
     reactionFlash.hidden = false;
@@ -2743,16 +2755,39 @@
     ctx.restore();
   }
 
+  /**
+   * Live clip frames must stay light — banner-native export size made mobile
+   * capture so slow that reactions collapsed to a single still (no 0.5× flash).
+   */
+  function getReactionCaptureSize(srcW, srcH) {
+    let w = Math.max(1, Math.round(srcW || 640));
+    let h = Math.max(1, Math.round(srcH || 480));
+    const maxEdge = isLikelyMobileDevice() ? 640 : 960;
+    const edge = Math.max(w, h);
+    if (edge > maxEdge) {
+      const scale = maxEdge / edge;
+      w = Math.max(1, Math.round(w * scale));
+      h = Math.max(1, Math.round(h * scale));
+    }
+    return { w, h };
+  }
+
   function grabReactionFrameDataUrl() {
     if (!camera.srcObject) return null;
-    const crop = getReactionCoverCrop();
-    const out = getReactionOutputSize(crop.w, crop.h);
-    captureCanvas.width = out.w;
-    captureCanvas.height = out.h;
-    const ctx = captureCanvas.getContext("2d");
-    // Camera only — border is overlaid in CSS for display and stamped fresh on download.
-    drawReactionCamera(ctx, out.w, out.h, crop);
-    return captureCanvas.toDataURL("image/jpeg", 0.95);
+    try {
+      const crop = getReactionCoverCrop();
+      const out = getReactionCaptureSize(crop.w, crop.h);
+      if (captureCanvas.width !== out.w) captureCanvas.width = out.w;
+      if (captureCanvas.height !== out.h) captureCanvas.height = out.h;
+      const ctx = captureCanvas.getContext("2d");
+      // Camera only — border is overlaid in CSS for display and stamped fresh on download.
+      drawReactionCamera(ctx, out.w, out.h, crop);
+      const quality = isLikelyMobileDevice() ? 0.72 : 0.92;
+      return captureCanvas.toDataURL("image/jpeg", quality);
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
   }
 
   function formatClipTimestamp(frameIndex) {
@@ -3033,7 +3068,10 @@
   }
 
   function pickAudioRecorderMimeType() {
-    const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+    // iOS Safari: mp4/aac only — webm-first caused mic capture to fail on mobile
+    const types = isLikelyMobileDevice()
+      ? ["audio/mp4", "audio/aac", "audio/webm;codecs=opus", "audio/webm"]
+      : ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
     if (typeof MediaRecorder === "undefined") return "";
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
   }
@@ -3105,13 +3143,20 @@
       setTimeout(markStop, REACTION_CLIP_MS);
     }
 
+    // Keep grabbing briefly after overlay ends so a slow first frame doesn't yield a "still"
+    const minFrames = Math.max(3, Math.ceil((REACTION_CLIP_MS / 1000) * REACTION_CLIP_FPS * 0.45));
+    const minMs = Math.round(REACTION_CLIP_MS * 0.55);
+
     const micRec = startReactionMicRecorder();
     let audioBlob = null;
     try {
-      // Capture from Fire!/bust start until the overlay clip ends
-      while (!stop && performance.now() - started < REACTION_CLIP_MAX_MS) {
+      // Capture from Fire!/bust start until the overlay clip ends (with a short floor)
+      while (performance.now() - started < REACTION_CLIP_MAX_MS) {
         const frame = grabReactionFrameDataUrl();
         if (frame) frames.push(frame);
+        const elapsed = performance.now() - started;
+        if (stop && frames.length >= minFrames && elapsed >= minMs) break;
+        if (stop && elapsed >= REACTION_CLIP_MS) break;
         await waitMs(interval);
       }
       const last = grabReactionFrameDataUrl();
@@ -3357,9 +3402,40 @@
       await navigator.share(data);
       return true;
     } catch (err) {
-      if (err && err.name === "AbortError") return true;
+      // Real user cancel. In iframes (BBV) WebKit sometimes AbortErrors without a
+      // sheet after a lost tap gesture — return false so host download can run.
+      if (err && err.name === "AbortError") return !isEmbeddedFrame();
       return false;
     }
+  }
+
+  /** Shrink big PNGs before postMessage — large transfers flake out in mobile iframes. */
+  async function blobForHostTransfer(blob, filename) {
+    const name = String(filename || "reaction.bin");
+    if (!blob) return { blob, filename: name };
+    const mime = blob.type || mimeFromFilename(name);
+    if (!/^image\//.test(mime)) return { blob, filename: name };
+    // Small enough — keep as-is (preserves PNG border crispness)
+    if (blob.size < 1_250_000) return { blob, filename: name };
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bitmap, 0, 0);
+      if (typeof bitmap.close === "function") bitmap.close();
+      const jpeg = await canvasToBlob(canvas, "image/jpeg", 0.92);
+      if (jpeg && jpeg.size && jpeg.size < blob.size) {
+        return {
+          blob: jpeg,
+          filename: name.replace(/\.png$/i, ".jpg"),
+        };
+      }
+    } catch (_) {
+      /* keep original */
+    }
+    return { blob, filename: name };
   }
 
   function savePickerTypesFor(filename, mime) {
@@ -3443,8 +3519,12 @@
   async function tryHostDownloadEntries(entries) {
     if (!isEmbeddedFrame() || !entries.length) return false;
     try {
-      if (entries.length === 1) {
-        const { blob, filename } = entries[0];
+      const prepared = [];
+      for (const entry of entries) {
+        prepared.push(await blobForHostTransfer(entry.blob, entry.filename));
+      }
+      if (prepared.length === 1) {
+        const { blob, filename } = prepared[0];
         const buffer = await blob.arrayBuffer();
         return requestHostDownload({
           filename,
@@ -3452,7 +3532,7 @@
           buffer,
         });
       }
-      for (const { blob, filename } of entries) {
+      for (const { blob, filename } of prepared) {
         const buffer = await blob.arrayBuffer();
         requestHostDownload({
           filename,
@@ -3467,7 +3547,8 @@
   }
 
   /**
-   * Mobile → native share sheet (Save Image / Save Video).
+   * Mobile standalone → share sheet.
+   * Mobile BBV iframe → host download first (share is flaky after async image render).
    * Desktop → Finder/Explorer (single file) or folder picker (batch). Never Share.
    * @param {{ blob: Blob, filename: string }[]} entries
    */
@@ -3481,8 +3562,14 @@
     if (!list.length) return;
 
     if (isLikelyMobileDevice()) {
-      if (await tryShareFiles(list)) return;
-      if (await tryHostDownloadEntries(list)) return;
+      // Embedded shells: host is reliable; share often AbortErrors once the tap gesture is gone
+      if (isEmbeddedFrame()) {
+        if (await tryHostDownloadEntries(list)) return;
+        if (await tryShareFiles(list)) return;
+      } else {
+        if (await tryShareFiles(list)) return;
+        if (await tryHostDownloadEntries(list)) return;
+      }
       list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
       return;
     }
@@ -3603,6 +3690,11 @@
     // Desktop: open Finder/Explorer on the click, before async render loses the gesture
     const desktop = await reserveDesktopSave(name);
     if (desktop?.cancelled) return;
+
+    // Keep warm moving so a second tap (or this await) is more likely to hit cache
+    if (reactionOrUrl && typeof reactionOrUrl === "object") {
+      warmReactionPngExport(reactionOrUrl);
+    }
 
     const blob = await getReactionPngExport(reactionOrUrl);
     if (!blob) return;
