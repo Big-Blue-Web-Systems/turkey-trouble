@@ -397,26 +397,63 @@ body {
   width: var(--tile-w);
   height: var(--tile-h);
   aspect-ratio: 5 / 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   justify-self: center;
   align-self: center;
-  text-align: center;
-  padding: 0.3rem;
-  background: linear-gradient(160deg, var(--tile-top, #5c3418), var(--tile-bot, #3a2414));
-  border: 2px solid var(--tile-edge, #8a5a2b);
+  padding: 0;
+  border: none;
+  background: transparent;
   border-radius: 10px;
   font-family: Bangers, cursive;
   font-size: clamp(0.95rem, 2.5vw, 1.25rem);
   letter-spacing: 0.09em;
   color: var(--tile-ink, #fff4e0);
+  perspective: 1100px;
   transition:
-    background 60ms linear,
-    border-color 60ms linear,
-    box-shadow 60ms linear,
-    filter 60ms linear;
+    filter 280ms ease,
+    opacity 280ms ease,
+    box-shadow 60ms linear;
   user-select: none;
+}
+
+.tile-flipper {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 0.45s cubic-bezier(0.4, 0.05, 0.2, 1);
+}
+
+.tile.is-flipped .tile-flipper {
+  transform: rotateY(180deg);
+}
+
+.tile-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+  padding: 0.3rem;
+  border-radius: 10px;
+  border: 2px solid var(--tile-edge, #8a5a2b);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tile-face-front {
+  background: linear-gradient(160deg, var(--tile-top, #5c3418), var(--tile-bot, #3a2414));
+  color: var(--tile-ink, #fff4e0);
+}
+
+.tile-face-back {
+  background: linear-gradient(160deg, #ff3b3b, #d41818);
+  border-color: #ff8a8a;
+  color: #fff;
+  transform: rotateY(180deg);
+  padding: 0.2rem;
+  overflow: hidden;
 }
 
 .tile.tone-brown {
@@ -480,6 +517,10 @@ body {
 }
 
 .tile.is-lit {
+  z-index: 2;
+}
+
+.tile.is-lit:not(.is-flipped) .tile-face-front {
   background: linear-gradient(160deg, var(--gold-hot), var(--amber));
   border-color: #fff3a8;
   color: #2a1400;
@@ -487,18 +528,9 @@ body {
     0 0 22px rgba(255, 180, 40, 0.75),
     inset 0 0 12px rgba(255, 255, 255, 0.35);
   filter: brightness(1.08);
-  z-index: 2;
 }
 
-.tile.is-turkey {
-  background: linear-gradient(160deg, #ff3b3b, #d41818);
-  border-color: #ff8a8a;
-  color: #fff;
-  overflow: hidden;
-  padding: 0.2rem;
-}
-
-.tile.is-turkey .turkey-pic {
+.tile .turkey-pic {
   display: block;
   width: auto;
   height: 92%;
@@ -510,22 +542,61 @@ body {
   pointer-events: none;
 }
 
-.tile.is-turkey.is-lit {
+.tile.is-turkey.is-lit .tile-face-back,
+.tile.is-flipped.is-lit .tile-face-back {
   background: linear-gradient(160deg, #ff5c5c, #e02020);
   border-color: #ffd0d0;
-  color: #fff;
   box-shadow:
     0 0 26px rgba(255, 60, 60, 0.85),
     inset 0 0 12px rgba(255, 255, 255, 0.2);
 }
 
-.tile.is-turkey.is-lit .turkey-pic {
+.tile.is-turkey.is-lit .turkey-pic,
+.tile.is-flipped.is-lit .turkey-pic {
   filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.35));
 }
 
-.tile.is-awarded {
+.tile.is-awarded .tile-face-front,
+.tile.is-awarded.is-flipped .tile-face-back {
   outline: 2px solid var(--ok);
   outline-offset: 1px;
+}
+
+.board.is-revealing .tile.is-dimmed {
+  filter: brightness(0.28) saturate(0.55);
+  opacity: 0.48;
+  pointer-events: none;
+}
+
+.board.is-revealing .tile.is-reveal-target {
+  z-index: 6;
+  filter: none;
+  opacity: 1;
+}
+
+.tile.is-pulse .tile-face-front {
+  animation: tile-reveal-pulse 0.55s ease-in-out both;
+}
+
+@keyframes tile-reveal-pulse {
+  0% {
+    filter: brightness(1.2);
+    box-shadow:
+      0 0 22px rgba(255, 180, 40, 0.75),
+      inset 0 0 12px rgba(255, 255, 255, 0.35);
+  }
+  50% {
+    filter: brightness(0.42);
+    box-shadow:
+      0 0 8px rgba(0, 0, 0, 0.35),
+      inset 0 0 10px rgba(0, 0, 0, 0.25);
+  }
+  100% {
+    filter: brightness(1.25);
+    box-shadow:
+      0 0 28px rgba(255, 200, 60, 0.9),
+      inset 0 0 14px rgba(255, 255, 255, 0.4);
+  }
 }
 
 .camera-well {
@@ -801,21 +872,32 @@ body {
   color: var(--turkey-glow);
 }
 
-/* —— Turkey bust video —— */
+/* —— Fire! / bust overlay videos —— */
 .turkey-blast {
   position: absolute;
   inset: 0;
-  z-index: 5;
+  z-index: 8;
   overflow: hidden;
   background: #000;
   pointer-events: none;
 }
 
-.bust-video {
-  display: block;
+.turkey-blast[hidden] {
+  display: none !important;
+}
+
+.overlay-video {
+  position: absolute;
+  inset: 0;
+  display: none;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  background: #000;
+}
+
+.overlay-video.is-showing {
+  display: block;
 }
 
 .camera-well.is-blasting #camera,
@@ -828,7 +910,7 @@ body {
   position: absolute;
   left: 66%;
   top: 38%;
-  z-index: 6;
+  z-index: 9;
   transform: translate(-50%, -50%);
   font-family: Bangers, cursive;
   font-size: clamp(1.35rem, 3.8vw, 2.15rem);

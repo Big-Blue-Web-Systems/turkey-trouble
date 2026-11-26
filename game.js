@@ -24,7 +24,9 @@
   const SPIN_MAX_MS = 140;
   const REACTION_DELAY_MS = 1500;
   /** Gunshot / feather-burst peak in turkey-trouble-fire.mp4 */
-  const FIRE_GUNSHOT_MS = 1130;
+  const FIRE_GUNSHOT_MS = 150;
+  const TILE_PULSE_MS = 550;
+  const TILE_FLIP_MS = 450;
   const FAVORITES_KEY = "turkeyTroubleFavorites";
 
   const board = document.getElementById("board");
@@ -89,6 +91,7 @@
   /** @type {Promise<void>|null} */
   let fireVideoPromise = null;
   let fireHitTimer = null;
+  let tileRevealInProgress = false;
   let dragFromIndex = null;
   let selectedFavoriteIndex = -1;
   let endTurnPlayerIndex = -1;
@@ -258,11 +261,60 @@
       el.style.gridRow = String(slot.row);
       el.style.gridColumn = String(slot.col);
       el.dataset.index = String(i);
-      el.innerHTML = `<span class="label">${formatValue(value)}</span>`;
+      el.innerHTML = `
+        <span class="tile-flipper">
+          <span class="tile-face tile-face-front">
+            <span class="label">${formatValue(value)}</span>
+          </span>
+          <span class="tile-face tile-face-back">
+            <img class="turkey-pic" src="assets/turkey-tile.png" alt="" />
+          </span>
+        </span>
+      `;
       el.setAttribute("aria-label", formatValue(value));
       board.insertBefore(el, cameraWell);
       return { value, isTurkey: false, el };
     });
+  }
+
+  function waitMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function clearTileRevealClasses() {
+    board.classList.remove("is-revealing");
+    tiles.forEach((t) => {
+      t.el.classList.remove("is-dimmed", "is-reveal-target", "is-pulse");
+    });
+  }
+
+  async function playPrizeReveal(tile) {
+    tileRevealInProgress = true;
+    board.classList.add("is-revealing");
+    tiles.forEach((t) => {
+      if (t === tile) {
+        t.el.classList.add("is-reveal-target");
+        t.el.classList.remove("is-dimmed");
+      } else {
+        t.el.classList.add("is-dimmed");
+      }
+    });
+
+    tile.el.classList.remove("is-pulse");
+    void tile.el.offsetWidth;
+    tile.el.classList.add("is-pulse");
+    await waitMs(TILE_PULSE_MS);
+    tile.el.classList.remove("is-pulse");
+
+    tile.isTurkey = true;
+    tile.el.classList.add("is-turkey", "is-flipped");
+    tile.el.setAttribute("aria-label", "Turkey");
+    const label = tile.el.querySelector(".label");
+    if (label) label.remove();
+    await waitMs(TILE_FLIP_MS);
+
+    clearTileRevealClasses();
+    tileRevealInProgress = false;
   }
 
   function formatValue(n) {
@@ -554,45 +606,76 @@
     [fireVideo, bustVideo].forEach((video) => {
       if (!video) return;
       video.pause();
-      video.hidden = true;
+      video.classList.remove("is-showing");
+      video.onended = null;
+      video.onerror = null;
     });
     turkeyBlast.hidden = true;
+    turkeyBlast.setAttribute("aria-hidden", "true");
     cameraWell.classList.remove("is-blasting");
   }
 
   function playOverlayVideo(video) {
     return new Promise((resolve) => {
+      let settled = false;
       const finish = () => {
+        if (settled) return;
+        settled = true;
+        video.onended = null;
+        video.onerror = null;
         video.pause();
-        video.removeEventListener("ended", onEnded);
-        video.removeEventListener("error", onEnded);
-        video.hidden = true;
-        if ([fireVideo, bustVideo].every((v) => !v || v.hidden || v.paused)) {
+        video.classList.remove("is-showing");
+        const otherShowing = [fireVideo, bustVideo].some(
+          (v) => v && v !== video && v.classList.contains("is-showing")
+        );
+        if (!otherShowing) {
           turkeyBlast.hidden = true;
+          turkeyBlast.setAttribute("aria-hidden", "true");
           cameraWell.classList.remove("is-blasting");
         }
         resolve();
       };
-      const onEnded = () => finish();
 
       [fireVideo, bustVideo].forEach((other) => {
         if (!other || other === video) return;
         other.pause();
-        other.hidden = true;
+        other.classList.remove("is-showing");
+        other.onended = null;
+        other.onerror = null;
       });
 
       turkeyBlast.hidden = false;
+      turkeyBlast.setAttribute("aria-hidden", "false");
       cameraWell.classList.add("is-blasting");
-      video.hidden = false;
-      video.currentTime = 0;
+      video.classList.add("is-showing");
       video.muted = false;
-      video.addEventListener("ended", onEnded);
-      video.addEventListener("error", onEnded);
+      video.playsInline = true;
+      video.onended = finish;
+      video.onerror = finish;
 
-      const playAttempt = video.play();
-      if (playAttempt && typeof playAttempt.catch === "function") {
-        playAttempt.catch(() => finish());
-      }
+      const startPlayback = async () => {
+        try {
+          if (video.readyState > 0) video.currentTime = 0;
+        } catch (_) {
+          /* ignore seek issues */
+        }
+        try {
+          await video.play();
+        } catch (_) {
+          try {
+            video.muted = true;
+            await video.play();
+          } catch (__) {
+            finish();
+          }
+        }
+      };
+
+      startPlayback();
+      // Failsafe so a stuck clip can't block the turn forever
+      setTimeout(() => {
+        if (!settled) finish();
+      }, 20000);
     });
   }
 
@@ -632,9 +715,10 @@
   }
 
   function startSpin() {
-    if (!gameStarted || spinning || turnOver || !canAct) return;
+    if (!gameStarted || spinning || turnOver || !canAct || tileRevealInProgress) return;
     hideOverlayVideos();
     hideBanner();
+    clearTileRevealClasses();
     awaitingChoice = false;
     tiles.forEach((t) => t.el.classList.remove("is-awarded"));
     spinning = true;
@@ -663,8 +747,6 @@
       }
       gobbleGain = null;
     }
-
-    const firePromise = playFireVideo();
 
     const landed = tiles[litIndex];
     if (!landed) {
@@ -701,35 +783,36 @@
       showBanner("TURKEY! Turn over", true);
       playSting("bust");
       updateActionButton();
-      finishTurnAfterTurkey(firePromise);
+      // Start bust playback in the same click turn so audio/video unlock reliably
+      const bustPromise = playTurkeyAnimation();
+      finishTurnAfterTurkey(bustPromise);
       return;
     }
 
+    const firePromise = playFireVideo();
     scheduleFireHitAmount(formatValue(awardedValue));
     setTurnScore(turnScore + awardedValue);
     hideBanner();
     playSting("win");
 
-    landed.isTurkey = true;
-    landed.el.classList.add("is-turkey");
-    const label = landed.el.querySelector(".label");
-    if (label) label.remove();
-    if (!landed.el.querySelector(".turkey-pic")) {
-      const pic = document.createElement("img");
-      pic.className = "turkey-pic";
-      pic.src = "assets/turkey-tile.png";
-      pic.alt = "Turkey";
-      landed.el.appendChild(pic);
-    }
-    landed.el.setAttribute("aria-label", "Turkey");
+    canAct = false;
+    awaitingChoice = false;
+    updateActionButton();
+    finishPrizeAfterFire(firePromise, landed);
+  }
 
+  async function finishPrizeAfterFire(firePromise, landed) {
+    await (firePromise || fireVideoPromise || Promise.resolve());
+    if (turnOver) return;
+    await playPrizeReveal(landed);
+    if (turnOver) return;
+    canAct = true;
     awaitingChoice = true;
     updateActionButton();
   }
 
-  async function finishTurnAfterTurkey(firePromise) {
-    await (firePromise || fireVideoPromise || Promise.resolve());
-    await playTurkeyAnimation();
+  async function finishTurnAfterTurkey(bustPromise) {
+    await (bustPromise || playTurkeyAnimation());
     const playerName = players[currentPlayer]?.name || "Player";
     captureReaction({
       bust: true,
@@ -789,7 +872,7 @@
   }
 
   async function bankPoints() {
-    if (!awaitingChoice || spinning || turnOver) return;
+    if (!awaitingChoice || spinning || turnOver || tileRevealInProgress) return;
     const bankedAmount = turnScore;
     players[currentPlayer].banked += bankedAmount;
     setTurnScore(0);
