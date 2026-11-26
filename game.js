@@ -2157,27 +2157,84 @@
   /** Flash mic playback is 2× louder than unity (HTMLAudio maxes at 1). */
   const FLASH_AUDIO_GAIN = 2;
 
-  function stopFlashPlaybackAudio(audio, graph) {
-    if (audio) {
+  function stopFlashPlaybackAudio(handle) {
+    if (!handle) return;
+    try {
+      handle.source?.stop?.();
+    } catch (_) {
+      /* already stopped */
+    }
+    try {
+      handle.source?.disconnect?.();
+    } catch (_) {
+      /* ignore */
+    }
+    try {
+      handle.gain?.disconnect?.();
+    } catch (_) {
+      /* ignore */
+    }
+    if (handle.element) {
       try {
-        audio.pause();
-        audio.removeAttribute("src");
-        audio.load();
+        handle.element.pause();
+        handle.element.removeAttribute("src");
+        handle.element.load();
       } catch (_) {
         /* ignore */
       }
     }
-    if (graph) {
+  }
+
+  /**
+   * Slow/fast mic playback via AudioBufferSourceNode.
+   * HTMLAudioElement.playbackRate is spotty on mobile (1× glitchy or silent).
+   */
+  async function startFlashClipAudio(reaction, playbackRate, startSec) {
+    if (!effectsAllowed()) return null;
+    const rate = playbackRate > 0 ? playbackRate : 1;
+    let blob = null;
+    if (reaction?.audioBlob instanceof Blob && reaction.audioBlob.size) {
+      blob = reaction.audioBlob;
+    } else if (reaction?.audioUrl) {
       try {
-        graph.source?.disconnect();
+        const res = await fetch(reaction.audioUrl);
+        if (res.ok) blob = await res.blob();
       } catch (_) {
-        /* ignore */
+        blob = null;
       }
+    }
+    if (!blob || !blob.size) return null;
+
+    ensureAudio();
+    if (!audioCtx) return null;
+    if (audioCtx.state === "suspended") {
       try {
-        graph.gain?.disconnect();
+        await audioCtx.resume();
       } catch (_) {
-        /* ignore */
+        /* continue */
       }
+    }
+
+    try {
+      const raw = await blob.arrayBuffer();
+      const buffer = await audioCtx.decodeAudioData(raw.slice(0));
+      if (!buffer?.duration) return null;
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = rate;
+
+      const gain = audioCtx.createGain();
+      gain.gain.value = FLASH_AUDIO_GAIN;
+      source.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      const offset = Math.max(0, Math.min(Number(startSec) || 0, Math.max(0, buffer.duration - 0.05)));
+      source.start(0, offset);
+      return { source, gain, element: null };
+    } catch (err) {
+      console.error(err);
+      return null;
     }
   }
 
@@ -2276,53 +2333,10 @@
     const endFrame = trim ? trim.endFrame : frames.length;
     const startSec = trim ? trim.startSec : 0;
     const decodeEach = isLikelyMobileDevice();
-    let flashAudio = null;
-    let flashGraph = null;
+    let flashHandle = null;
 
-    // Flash audio counts as a sound effect (all / effects — not mute)
-    if (effectsAllowed() && reaction?.audioUrl) {
-      try {
-        ensureAudio();
-        if (audioCtx?.state === "suspended") {
-          try {
-            await audioCtx.resume();
-          } catch (_) {
-            /* continue with element volume */
-          }
-        }
-        flashAudio = new Audio(reaction.audioUrl);
-        flashAudio.playsInline = true;
-        flashAudio.playbackRate = playbackRate;
-        // Let pitch ride with rate — slow-mo deep / 2× chipmunk
-        if ("preservesPitch" in flashAudio) flashAudio.preservesPitch = false;
-        if ("mozPreservesPitch" in flashAudio) flashAudio.mozPreservesPitch = false;
-        if ("webkitPreservesPitch" in flashAudio) flashAudio.webkitPreservesPitch = false;
-        flashAudio.volume = 1;
-        try {
-          flashAudio.currentTime = Math.max(0, startSec);
-        } catch (_) {
-          /* iOS may reject seek before metadata */
-        }
-        // Prefer GainNode boost; fall back to plain element play on mobile WebAudio quirks
-        try {
-          const source = audioCtx.createMediaElementSource(flashAudio);
-          const gain = audioCtx.createGain();
-          gain.gain.value = FLASH_AUDIO_GAIN;
-          source.connect(gain);
-          gain.connect(audioCtx.destination);
-          flashGraph = { source, gain };
-        } catch (_) {
-          flashGraph = null;
-          flashAudio.volume = Math.min(1, FLASH_AUDIO_GAIN);
-        }
-        const playAttempt = flashAudio.play();
-        if (playAttempt) playAttempt.catch(() => {});
-      } catch (_) {
-        stopFlashPlaybackAudio(flashAudio, flashGraph);
-        flashAudio = null;
-        flashGraph = null;
-      }
-    }
+    // Decode+buffer play keeps 0.5×/2× in sync on mobile (HTMLAudio rate does not)
+    flashHandle = await startFlashClipAudio(reaction, playbackRate, startSec);
 
     try {
       for (let i = startFrame; i < endFrame; i += 1) {
@@ -2332,7 +2346,7 @@
         await waitMs(frameInterval);
       }
     } finally {
-      stopFlashPlaybackAudio(flashAudio, flashGraph);
+      stopFlashPlaybackAudio(flashHandle);
     }
   }
 
