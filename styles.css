@@ -891,12 +891,83 @@ body {
 }
 
 .leaderboard-title {
-  margin: 0 0 0.45rem;
+  margin: 0;
+  padding: 0 0 0.4rem;
   font-family: Bangers, cursive;
   font-size: clamp(0.95rem, calc(var(--fit-tile-w) * 0.1), 1.25rem);
   letter-spacing: 0.14em;
   color: var(--gold);
   text-align: center;
+  border-bottom: 1px solid rgba(240, 180, 41, 0.35);
+}
+
+.high-score {
+  margin: 0.4rem 0 0.45rem;
+  padding: 0 0 0.4rem;
+  border: none;
+  border-bottom: 1px solid rgba(240, 180, 41, 0.35);
+  background: none;
+  text-align: center;
+}
+
+.high-score[hidden] {
+  display: none !important;
+}
+
+.high-score-heading {
+  margin: 0;
+  font-family: Bangers, cursive;
+  font-size: clamp(0.78rem, calc(var(--fit-tile-w) * 0.085), 0.95rem);
+  letter-spacing: 0.12em;
+  /* Same tone as the HUD player name (.score-label) */
+  color: var(--muted);
+}
+
+.high-score-name {
+  margin: 0.2rem 0 0;
+  font-family: Bangers, cursive;
+  font-size: 0.88rem;
+  letter-spacing: 0.08em;
+  color: var(--gold-hot);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.high-score-stats {
+  margin: 0.15rem 0 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--gold-hot);
+  white-space: nowrap;
+}
+
+.high-score-stats .hs-sep {
+  color: var(--muted);
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+.high-score-stats .hs-hits {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28em;
+  color: var(--muted);
+}
+
+.high-score-stats .lb-hits-icon {
+  width: 0.9em;
+  height: 0.9em;
+  flex-shrink: 0;
+  background-color: var(--gold);
+  -webkit-mask: url("assets/crosshair-hit.png") center / contain no-repeat;
+  mask: url("assets/crosshair-hit.png") center / contain no-repeat;
 }
 
 .leaderboard-list {

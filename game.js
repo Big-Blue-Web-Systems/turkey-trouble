@@ -34,6 +34,9 @@
   const REACTION_CLIP_FPS = 10;
   const REACTION_CLIP_MAX_MS = 20000;
   const FAVORITES_KEY = "turkeyTroubleFavorites";
+  const HIGH_SCORE_KEY = "turkeyTroubleHighScore";
+  const SOUND_MODE_KEY = "turkeyTroubleSoundMode";
+  const VIDEO_REACTION_KEY = "turkeyTroubleVideoReaction";
 
   const board = document.getElementById("board");
   const boardLights = document.getElementById("board-lights");
@@ -90,7 +93,35 @@
   const soundModeTriggerIcons = document.getElementById("sound-mode-trigger-icons");
   const soundModeMenu = document.getElementById("sound-mode-menu");
   /** @type {"all" | "effects" | "mute"} */
-  let soundMode = "all";
+  function loadStoredSoundMode() {
+    try {
+      const raw = localStorage.getItem(SOUND_MODE_KEY);
+      if (raw === "all" || raw === "effects" || raw === "mute") return raw;
+    } catch (_) {
+      /* ignore */
+    }
+    return "all";
+  }
+
+  function loadStoredVideoReaction() {
+    try {
+      const raw = localStorage.getItem(VIDEO_REACTION_KEY);
+      if (raw === "0" || raw === "false") return false;
+      if (raw === "1" || raw === "true") return true;
+    } catch (_) {
+      /* ignore */
+    }
+    return true;
+  }
+
+  let soundMode = loadStoredSoundMode();
+  if (captureVideoToggle) {
+    captureVideoToggle.checked = loadStoredVideoReaction();
+    captureVideoToggle.setAttribute(
+      "aria-checked",
+      captureVideoToggle.checked ? "true" : "false"
+    );
+  }
   const SOUND_MODE_META = {
     all: {
       label: "All",
@@ -1206,8 +1237,78 @@
   }
 
   const leaderboardEmpty = document.getElementById("leaderboard-empty");
+  const highScoreEl = document.getElementById("high-score");
+  const highScoreNameEl = document.getElementById("high-score-name");
+  const highScoreStatsEl = document.getElementById("high-score-stats");
+
+  /** @returns {{ name: string, banked: number, hits: number } | null} */
+  function loadHighScore() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(HIGH_SCORE_KEY) || "null");
+      if (!raw || typeof raw !== "object") return null;
+      const name = String(raw.name || "").trim();
+      const banked = Math.max(0, Math.floor(Number(raw.banked) || 0));
+      const hits = Math.max(0, Math.floor(Number(raw.hits) || 0));
+      if (!name || banked <= 0) return null;
+      return { name, banked, hits };
+    } catch {
+      return null;
+    }
+  }
+
+  function saveHighScore(record) {
+    localStorage.setItem(HIGH_SCORE_KEY, JSON.stringify(record));
+  }
+
+  /** Higher cash wins; same cash → fewer hits wins (matches cash-tie rules). */
+  function isBetterHighScore(candidate, current) {
+    if (!candidate || candidate.banked <= 0) return false;
+    if (!current) return true;
+    if (candidate.banked !== current.banked) return candidate.banked > current.banked;
+    return (candidate.hits || 0) < (current.hits || 0);
+  }
+
+  function considerHighScore(name, banked, hits) {
+    const candidate = {
+      name: String(name || "").trim(),
+      banked: Math.max(0, Math.floor(Number(banked) || 0)),
+      hits: Math.max(0, Math.floor(Number(hits) || 0)),
+    };
+    if (!candidate.name || candidate.banked <= 0) return false;
+    const current = loadHighScore();
+    if (!isBetterHighScore(candidate, current)) return false;
+    saveHighScore(candidate);
+    return true;
+  }
+
+  function considerPlayersForHighScore(list = players) {
+    let changed = false;
+    list.forEach((p) => {
+      if (considerHighScore(p.name, p.banked, p.hits)) changed = true;
+    });
+    return changed;
+  }
+
+  function renderHighScore() {
+    if (!highScoreEl || !highScoreNameEl || !highScoreStatsEl) return;
+    const record = loadHighScore();
+    if (!record) {
+      highScoreEl.hidden = true;
+      highScoreNameEl.textContent = "";
+      highScoreStatsEl.textContent = "";
+      return;
+    }
+    highScoreEl.hidden = false;
+    highScoreNameEl.textContent = record.name;
+    highScoreStatsEl.innerHTML = `
+      <span class="hs-cash">${formatValue(record.banked)}</span>
+      <span class="hs-sep" aria-hidden="true">|</span>
+      <span class="hs-hits"><span class="lb-hits-icon" aria-hidden="true"></span>${record.hits}</span>
+    `;
+  }
 
   function renderLeaderboard() {
+    renderHighScore();
     const showScores = gameStarted && players.length > 0;
     if (!showScores) {
       leaderboardList.innerHTML = "";
@@ -1515,6 +1616,11 @@
   function setSoundMode(mode) {
     if (mode !== "all" && mode !== "effects" && mode !== "mute") return;
     soundMode = mode;
+    try {
+      localStorage.setItem(SOUND_MODE_KEY, soundMode);
+    } catch (_) {
+      /* ignore quota / private mode */
+    }
     syncSoundModeToggle();
     closeSoundModeMenu();
     if (!effectsAllowed()) {
@@ -2969,6 +3075,11 @@
     if (!awaitingChoice || spinning || turnOver || tileRevealInProgress) return;
     const bankedAmount = turnScore;
     players[currentPlayer].banked += bankedAmount;
+    considerHighScore(
+      players[currentPlayer].name,
+      players[currentPlayer].banked,
+      players[currentPlayer].hits
+    );
     setTurnScore(0);
     showBanner(`Bagged ${formatValue(bankedAmount)}!`);
     playSting("bank");
@@ -3103,6 +3214,10 @@
       const favIndex = entries.findIndex((r) => r.dataUrl === player.favorite);
       selectedFavoriteIndex = favIndex >= 0 ? favIndex : 0;
     }
+
+    // Capture end-of-turn banked totals (solo + multi) for the persistent high score
+    considerHighScore(player.name, player.banked, player.hits);
+    renderHighScore();
 
     modalTitle.classList.toggle("is-fav-prompt", recheck);
     if (multi && recheck) {
@@ -3361,6 +3476,8 @@
 
   async function showWinner() {
     // Multiplayer only — solo ends on the results gallery
+    considerPlayersForHighScore();
+    renderHighScore();
     const topScore = Math.max(...players.map((p) => p.banked));
     const winners = players.filter((p) => p.banked === topScore);
     const favMap = loadFavoritesMap();
@@ -3582,6 +3699,14 @@
   btnStartFromSetup.addEventListener("click", startGameFromSetup);
   captureVideoToggle?.addEventListener("change", () => {
     captureVideoToggle.setAttribute("aria-checked", captureVideoToggle.checked ? "true" : "false");
+    try {
+      localStorage.setItem(
+        VIDEO_REACTION_KEY,
+        captureVideoToggle.checked ? "1" : "0"
+      );
+    } catch (_) {
+      /* ignore quota / private mode */
+    }
   });
   soundModeTrigger?.addEventListener("click", (e) => {
     e.stopPropagation();
