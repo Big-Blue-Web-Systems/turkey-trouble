@@ -3206,6 +3206,25 @@
     return String(filename || "reaction.png").replace(/\.(jpg|jpeg|webp)$/i, ".png");
   }
 
+  /** Avoid overwrite prompts — stamp every save with a unique date/time suffix. */
+  function uniqueDownloadName(filename) {
+    const raw = String(filename || "reaction.bin");
+    const m = /\.([a-z0-9]+)$/i.exec(raw);
+    const ext = m ? `.${m[1].toLowerCase()}` : "";
+    const stemRaw = ext ? raw.slice(0, -ext.length) : raw;
+    const stem =
+      stemRaw
+        .replace(/[^a-z0-9._-]+/gi, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "") || "reaction";
+    const d = new Date();
+    const p = (n, w = 2) => String(n).padStart(w, "0");
+    const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(
+      d.getMinutes()
+    )}${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
+    return `${stem}-${stamp}${ext}`;
+  }
+
   function mimeFromFilename(filename) {
     const name = String(filename || "").toLowerCase();
     if (name.endsWith(".png")) return "image/png";
@@ -3322,6 +3341,46 @@
     }
   }
 
+  function savePickerTypesFor(filename, mime) {
+    const extMatch = /\.[a-z0-9]+$/i.exec(filename || "");
+    const ext = extMatch ? extMatch[0].toLowerCase() : "";
+    const type = mime || mimeFromFilename(filename);
+    return [
+      {
+        description: "Reaction file",
+        accept: { [type]: ext ? [ext] : [".bin"] },
+      },
+    ];
+  }
+
+  /**
+   * Open Finder/Explorer immediately (must run in the click gesture).
+   * Returns { handle, filename }, { cancelled: true }, or null if unsupported.
+   */
+  async function reserveDesktopSave(filename) {
+    if (isLikelyMobileDevice()) return null;
+    if (typeof window.showSaveFilePicker !== "function") return null;
+    const name = uniqueDownloadName(filename);
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: savePickerTypesFor(name),
+      });
+      return { handle, filename: name };
+    } catch (err) {
+      if (err && err.name === "AbortError") return { cancelled: true };
+      return null;
+    }
+  }
+
+  async function writeBlobToFileHandle(handle, blob) {
+    if (!handle || !blob) return false;
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  }
+
   async function trySaveFilePicker(entries) {
     if (typeof window.showSaveFilePicker !== "function") return false;
     if (isLikelyMobileDevice()) return false;
@@ -3329,21 +3388,29 @@
     try {
       for (const { blob, filename } of entries) {
         const name = String(filename || "reaction.bin");
-        const mime = blob.type || mimeFromFilename(name);
-        const extMatch = /\.[a-z0-9]+$/i.exec(name);
-        const ext = extMatch ? extMatch[0].toLowerCase() : "";
         const handle = await window.showSaveFilePicker({
           suggestedName: name,
-          types: [
-            {
-              description: "Reaction file",
-              accept: { [mime]: ext ? [ext] : [".bin"] },
-            },
-          ],
+          types: savePickerTypesFor(name, blob.type),
         });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
+        await writeBlobToFileHandle(handle, blob);
+      }
+      return true;
+    } catch (err) {
+      if (err && err.name === "AbortError") return true;
+      return false;
+    }
+  }
+
+  async function trySaveToDirectory(entries) {
+    if (typeof window.showDirectoryPicker !== "function") return false;
+    if (isLikelyMobileDevice()) return false;
+    if (!entries?.length) return false;
+    try {
+      const dir = await window.showDirectoryPicker({ mode: "readwrite" });
+      for (const { blob, filename } of entries) {
+        const name = String(filename || uniqueDownloadName("reaction.bin"));
+        const fileHandle = await dir.getFileHandle(name, { create: true });
+        await writeBlobToFileHandle(fileHandle, blob);
       }
       return true;
     } catch (err) {
@@ -3380,11 +3447,16 @@
 
   /**
    * Mobile → native share sheet (Save Image / Save Video).
-   * Desktop → Finder/Explorer save picker (never the Share menu).
+   * Desktop → Finder/Explorer (single file) or folder picker (batch). Never Share.
    * @param {{ blob: Blob, filename: string }[]} entries
    */
   async function saveFilesToDevice(entries) {
-    const list = (entries || []).filter((e) => e?.blob);
+    const list = (entries || [])
+      .filter((e) => e?.blob)
+      .map((e) => ({
+        blob: e.blob,
+        filename: uniqueDownloadName(e.filename),
+      }));
     if (!list.length) return;
 
     if (isLikelyMobileDevice()) {
@@ -3394,7 +3466,7 @@
       return;
     }
 
-    // Desktop: Finder/Explorer for one file; batch saves skip the multi-dialog slog
+    if (list.length > 1 && (await trySaveToDirectory(list))) return;
     if (list.length === 1 && (await trySaveFilePicker(list))) return;
     if (await tryHostDownloadEntries(list)) return;
     list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
@@ -3481,9 +3553,18 @@
 
   async function downloadReactionWithBanner(reactionOrUrl, filename) {
     const name = pngDownloadName(filename);
+    // Desktop: open Finder/Explorer on the click, before async render loses the gesture
+    const desktop = await reserveDesktopSave(name);
+    if (desktop?.cancelled) return;
+
     const blob = await getReactionPngExport(reactionOrUrl);
     if (!blob) return;
-    await saveBlobToDevice(blob, name);
+
+    if (desktop?.handle) {
+      await writeBlobToFileHandle(desktop.handle, blob);
+      return;
+    }
+    await saveBlobToDevice(blob, desktop?.filename || name);
   }
 
   function pickRecorderMimeType(withAudio = false) {
@@ -3711,14 +3792,29 @@
       return;
     }
 
+    const base = String(filename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
+    const mimeGuess = pickRecorderMimeType(true);
+    const extGuess = mimeGuess.includes("mp4") ? "mp4" : "webm";
+    // Desktop: pick save location immediately so encode doesn't fall back to auto-download
+    const desktop = await reserveDesktopSave(`${base}.${extGuess}`);
+    if (desktop?.cancelled) return;
+
     const built = await getReactionVideoExport(reaction);
     if (!built?.blob) {
+      if (desktop?.handle) {
+        // User already chose a video path — fall back to a still via a fresh image save
+        await downloadReactionWithBanner(reaction, `${base}.png`);
+        return;
+      }
       await downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
       return;
     }
 
-    const base = String(filename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
-    await saveBlobToDevice(built.blob, `${base}.${built.ext || "webm"}`);
+    if (desktop?.handle) {
+      await writeBlobToFileHandle(desktop.handle, built.blob);
+      return;
+    }
+    await saveBlobToDevice(built.blob, desktop?.filename || `${base}.${built.ext || extGuess}`);
   }
 
   function syncPreviewDownloadButtons() {
