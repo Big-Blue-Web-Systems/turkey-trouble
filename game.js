@@ -46,7 +46,16 @@
   const cameraStatus = document.getElementById("camera-status");
   const cameraWell = board.querySelector(".camera-well");
   const cameraBorder = document.querySelector(".camera-border");
+  // BBV blob shell loads assets from ticketed cross-origin URLs — without CORS,
+  // stamping the border taints the canvas and image downloads silently fail
+  // (video still works because MediaRecorder does not read pixels back).
+  if (cameraBorder) {
+    const borderSrc = cameraBorder.getAttribute("src") || cameraBorder.src;
+    cameraBorder.crossOrigin = "anonymous";
+    cameraBorder.src = borderSrc;
+  }
   const bannerImage = new Image();
+  bannerImage.crossOrigin = "anonymous";
   bannerImage.decoding = "async";
   bannerImage.src = cameraBorder?.src || "assets/camera-border.png";
   const resultBanner = document.getElementById("result-banner");
@@ -2647,6 +2656,7 @@
 
   /** Preload crosshair for canvas stamps (same asset as leaderboard hits). */
   const hitsIconImage = new Image();
+  hitsIconImage.crossOrigin = "anonymous";
   hitsIconImage.decoding = "async";
   hitsIconImage.src = "assets/crosshair-hit.png";
 
@@ -2659,7 +2669,10 @@
       hitsIconImage.addEventListener("load", done, { once: true });
       hitsIconImage.addEventListener("error", done, { once: true });
       // Re-kick decode in case the first attempt raced
-      if (!hitsIconImage.src) hitsIconImage.src = "assets/crosshair-hit.png";
+      if (!hitsIconImage.src) {
+        hitsIconImage.crossOrigin = "anonymous";
+        hitsIconImage.src = "assets/crosshair-hit.png";
+      }
     });
   }
 
@@ -3300,6 +3313,10 @@
   function loadImageFromUrl(url) {
     return new Promise((resolve, reject) => {
       const img = new Image();
+      // http(s) ticket URLs on BBV must be CORS-clean for canvas export
+      if (/^https?:\/\//i.test(String(url || ""))) {
+        img.crossOrigin = "anonymous";
+      }
       img.onload = () => resolve(img);
       img.onerror = reject;
       img.src = url;
@@ -3709,12 +3726,20 @@
     // Stamp the original PNG last so JPEG camera compression never touches the border.
     stampBannerOnCanvas(ctx, outW, outH);
     stampReactionHudOnCanvas(ctx, outW, outH, reaction);
-    // Mobile: JPEG warms/saves much faster and survives BBV postMessage; border is already stamped.
-    if (isLikelyMobileDevice()) {
-      const jpeg = await canvasToBlob(canvas, "image/jpeg", 0.9);
-      if (jpeg) return jpeg;
+
+    const preferJpeg = isLikelyMobileDevice();
+    try {
+      if (preferJpeg) {
+        const jpeg = await canvasToBlob(canvas, "image/jpeg", 0.9);
+        if (jpeg) return jpeg;
+      }
+      const png = await canvasToBlob(canvas, "image/png");
+      if (png) return png;
+      return dataUrlToBlob(canvas.toDataURL(preferJpeg ? "image/jpeg" : "image/png", 0.9));
+    } catch (_) {
+      // Tainted canvas (missing CORS) — still hand back the raw frame so save is not a no-op
+      return dataUrlToBlob(dataUrl);
     }
-    return (await canvasToBlob(canvas, "image/png")) || dataUrlToBlob(canvas.toDataURL("image/png"));
   }
 
   function filenameForImageBlob(filename, blob) {
@@ -3784,33 +3809,30 @@
   async function downloadReactionWithBanner(reactionOrUrl, filename) {
     const reaction =
       reactionOrUrl && typeof reactionOrUrl === "object" ? reactionOrUrl : null;
+    const base = String(filename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
 
-    // Mobile: never await before share. Warm blob → share in this tap turn.
-    // A prior await (even reserveDesktopSave→null) drops the iOS user gesture.
+    // Same shape as downloadReactionVideo: warm blob → gesture save; else await then save.
     if (isLikelyMobileDevice()) {
       const warmBlob = reaction?._exportPngBlob || null;
       if (warmBlob) {
         await saveBlobToDeviceFromGesture(
           warmBlob,
-          filenameForImageBlob(filename, warmBlob)
+          filenameForImageBlob(`${base}.png`, warmBlob)
         );
         return;
       }
       if (reaction) warmReactionPngExport(reaction);
       const blob = await getReactionPngExport(reactionOrUrl);
       if (!blob) return;
-      // Gesture is gone after render — host/anchor fallback only
-      await saveBlobToDevice(blob, filenameForImageBlob(filename, blob));
+      await saveBlobToDevice(blob, filenameForImageBlob(`${base}.png`, blob));
       return;
     }
 
-    const name = pngDownloadName(filename);
-    // Desktop: open Finder/Explorer on the click, before async render loses the gesture
+    const name = pngDownloadName(`${base}.png`);
     const desktop = await reserveDesktopSave(name);
     if (desktop?.cancelled) return;
 
     if (reaction) warmReactionPngExport(reaction);
-
     const blob = await getReactionPngExport(reactionOrUrl);
     if (!blob) return;
 
@@ -4902,11 +4924,9 @@
   });
   previewDownloadImage?.addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (!previewReaction && !previewDataUrl) return;
-    await downloadReactionWithBanner(
-      previewReaction || { dataUrl: previewDataUrl },
-      previewFilename || "reaction.png"
-    );
+    if (!previewReaction) return;
+    const base = String(previewFilename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
+    await downloadReactionWithBanner(previewReaction, `${base}.png`);
   });
   previewDownloadVideo?.addEventListener("click", async (e) => {
     e.stopPropagation();
