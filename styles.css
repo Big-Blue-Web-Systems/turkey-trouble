@@ -1105,18 +1105,18 @@ body {
 }
 
 .board {
-  --gap: clamp(0.28rem, calc(var(--fit-tile-w) * 0.04), 0.5rem);
-  /* --fit-tile-w / --board-inner-w are set in JS from viewport width + height */
+  /* --gap / --fit-tile-w / --board-inner-w are set in px by fitPlayArea — keep in sync */
+  --gap: 0.5rem;
   --tile-w: var(--fit-tile-w);
   --tile-h: calc(var(--tile-w) * 3 / 5); /* 5:3 — every tile */
 
   position: relative;
   box-sizing: border-box;
-  /* Lock to computed inner width — max-width:100% was crushing the border box on
-     narrow screens while tile tracks stayed fixed, so the right border overlapped tiles. */
-  width: var(--board-inner-w);
-  min-width: var(--board-inner-w);
+  /* Size to the grid itself. A fixed border-box width that disagreed with CSS gap
+     was clipping the right border into the tiles on mobile / iframe shells. */
+  width: max-content;
   max-width: none;
+  min-width: 0;
   margin-inline: 0;
   display: grid;
   grid-template-columns: repeat(4, var(--tile-w));

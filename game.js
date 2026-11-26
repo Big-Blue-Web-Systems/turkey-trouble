@@ -4011,13 +4011,17 @@
     const frameMarginY =
       (parseFloat(frameStyles.marginTop) || 0) + (parseFloat(frameStyles.marginBottom) || 0);
     const bodyPadBottom = parseFloat(bodyStyles.paddingBottom) || 0;
-    const border = 6;
+    const bodyPadX =
+      (parseFloat(bodyStyles.paddingLeft) || 0) + (parseFloat(bodyStyles.paddingRight) || 0);
+    const border = 6; // 3px left + 3px right
     const safety = 6;
     const horizontal = isReactionsHorizontal();
     const stageW = stageEl?.clientWidth || document.documentElement.clientWidth;
-    // Mobile: match the full-width Start / Pull / Fire button edge-to-edge
     const columnW = boardColumn?.clientWidth || stageW;
+    // Prefer visualViewport — matches the iframe / iOS visible width the user actually sees
+    const viewportW = window.visualViewport?.width || document.documentElement.clientWidth;
     const viewportH = window.visualViewport?.height || window.innerHeight;
+    const usableViewportW = Math.max(160, viewportW - bodyPadX);
     const rowTop = boardRow.getBoundingClientRect().top;
 
     // Solve tile size against width + height with interdependent pad/gap/reactions width.
@@ -4026,22 +4030,33 @@
     let pad = 18;
     let boardInnerW = 480;
 
-    for (let i = 0; i < 5; i++) {
-      gap = Math.max(4.5, Math.min(8, tileW * 0.04));
+    function layoutGap(tw) {
+      return Math.max(4.5, Math.min(8, tw * 0.04));
+    }
+    function layoutPad(tw) {
+      const bulbR = Math.max(6, Math.min(12, tw * 0.045));
+      const bulbClear = Math.max(5, Math.min(10, tw * 0.035));
+      return Math.max(
+        bulbR + bulbClear + 4,
+        Math.max(10, Math.min(28, tw * 0.11))
+      );
+    }
+    function boardWidthFor(tw, g) {
+      return 4 * tw + 5 * g + border;
+    }
+
+    for (let i = 0; i < 6; i++) {
+      gap = layoutGap(tileW);
       // Frame ring (lights + clearance outside board border) is locked to the board —
       // never shrink pad to chase edge-to-edge width; body padding handles that.
-      const bulbR = Math.max(6, Math.min(12, tileW * 0.045));
-      const bulbClear = Math.max(5, Math.min(10, tileW * 0.035));
-      const minFramePad = bulbR + bulbClear + 4;
-      pad = Math.max(minFramePad, Math.max(10, Math.min(28, tileW * 0.11)));
+      pad = layoutPad(tileW);
       const reactionsW = horizontal
         ? 0
         : Math.min(240, Math.max(72, tileW * 0.92));
       const sideGutter = horizontal ? 0 : reactionsW + colGap;
-      // Mobile: leave a couple px so subpixel rounding never makes frame > column
-      // (that used to crush .board via max-width and overlap the right border on tiles).
+      // Mobile: fit the light frame inside the visible viewport (iframe-safe), not just columnW.
       const availableFrameW = horizontal
-        ? Math.max(160, columnW - 2)
+        ? Math.max(160, Math.min(columnW, usableViewportW) - 4)
         : Math.max(160, stageW - 2 * sideGutter);
       const availableBoardW = Math.max(140, availableFrameW - 2 * pad);
 
@@ -4055,13 +4070,11 @@
 
       const tileFromW = (availableBoardW - border - 5 * gap) / 4;
       const tileFromH = (availableBoardH - border - 5 * gap) / (4 * (3 / 5));
-      // Mobile: fill column width so the light ring lines up with the Start button.
-      // Desktop: still fit width + height in the viewport.
-      // Floor mobile tile width so 4 tracks + gaps + border never exceed the column.
+      // Floor mobile tile width so 4 tracks + gaps + border never exceed the frame budget.
       const next = horizontal
         ? Math.max(48, Math.floor(tileFromW * 100) / 100)
         : Math.max(48, Math.min(tileFromW, tileFromH));
-      boardInnerW = 4 * next + 5 * gap + border;
+      boardInnerW = boardWidthFor(next, layoutGap(next));
       if (Math.abs(next - tileW) < 0.25) {
         tileW = next;
         break;
@@ -4069,41 +4082,67 @@
       tileW = next;
     }
 
-    gap = Math.max(4.5, Math.min(8, tileW * 0.04));
+    gap = layoutGap(tileW);
+    pad = layoutPad(tileW);
     let bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
     let bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
-    // Inseparable: pad ≥ bulb radius + clearance + buffer so lights never meet the border
-    pad = Math.max(
-      bulbRadius + bulbClearance + 4,
-      Math.max(10, Math.min(28, tileW * 0.11))
-    );
-    boardInnerW = 4 * tileW + 5 * gap + border;
+    boardInnerW = boardWidthFor(tileW, gap);
 
-    // Final mobile clamp: frame (board + pad ring) must fit the column.
+    // Final mobile clamp: frame (board + pad ring) must fit the visible viewport.
     if (horizontal) {
-      const maxFrameW = Math.max(160, columnW - 2);
-      const maxBoardW = Math.max(140, maxFrameW - 2 * pad);
+      const maxFrameW = Math.max(160, Math.min(columnW, usableViewportW) - 4);
+      let maxBoardW = Math.max(140, maxFrameW - 2 * pad);
       if (boardInnerW > maxBoardW) {
         tileW = Math.max(48, Math.floor(((maxBoardW - border - 5 * gap) / 4) * 100) / 100);
-        gap = Math.max(4.5, Math.min(8, tileW * 0.04));
+        gap = layoutGap(tileW);
+        pad = layoutPad(tileW);
         bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
         bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
-        pad = Math.max(
-          bulbRadius + bulbClearance + 4,
-          Math.max(10, Math.min(28, tileW * 0.11))
-        );
-        boardInnerW = 4 * tileW + 5 * gap + border;
+        boardInnerW = boardWidthFor(tileW, gap);
+        maxBoardW = Math.max(140, maxFrameW - 2 * pad);
+        if (boardInnerW > maxBoardW) {
+          tileW = Math.max(48, Math.floor(((maxBoardW - border - 5 * gap) / 4) * 100) / 100);
+          gap = layoutGap(tileW);
+          pad = layoutPad(tileW);
+          bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
+          bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
+          boardInnerW = boardWidthFor(tileW, gap);
+        }
       }
     }
     const reactionsCol = Math.min(240, Math.max(72, tileW * 0.92));
 
     boardRow.style.setProperty("--fit-tile-w", `${tileW.toFixed(2)}px`);
+    boardRow.style.setProperty("--gap", `${gap.toFixed(2)}px`);
     boardRow.style.setProperty("--board-inner-w", `${boardInnerW.toFixed(2)}px`);
     boardRow.style.setProperty("--board-pad", `${pad.toFixed(2)}px`);
     boardRow.style.setProperty("--bulb-radius", `${bulbRadius.toFixed(2)}px`);
     boardRow.style.setProperty("--bulb-clearance", `${bulbClearance.toFixed(2)}px`);
     if (!horizontal) {
       boardRow.style.setProperty("--reactions-col", `${reactionsCol.toFixed(2)}px`);
+    }
+
+    // Post-layout correction: if the frame still spills past the visible right edge, shrink once.
+    if (horizontal) {
+      void board.offsetWidth;
+      const frameRight = boardFrame.getBoundingClientRect().right;
+      const maxRight = viewportW - (parseFloat(bodyStyles.paddingRight) || 0) - 1;
+      if (frameRight > maxRight + 0.5 && tileW > 48) {
+        const overflow = frameRight - maxRight;
+        const shrink = Math.min(overflow / 4, tileW - 48);
+        tileW = Math.max(48, Math.floor((tileW - shrink) * 100) / 100);
+        gap = layoutGap(tileW);
+        pad = layoutPad(tileW);
+        bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
+        bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
+        boardInnerW = boardWidthFor(tileW, gap);
+        boardRow.style.setProperty("--fit-tile-w", `${tileW.toFixed(2)}px`);
+        boardRow.style.setProperty("--gap", `${gap.toFixed(2)}px`);
+        boardRow.style.setProperty("--board-inner-w", `${boardInnerW.toFixed(2)}px`);
+        boardRow.style.setProperty("--board-pad", `${pad.toFixed(2)}px`);
+        boardRow.style.setProperty("--bulb-radius", `${bulbRadius.toFixed(2)}px`);
+        boardRow.style.setProperty("--bulb-clearance", `${bulbClearance.toFixed(2)}px`);
+      }
     }
 
     // Lock camera overlay type to the clip window (1 unit = 1% of well width)
