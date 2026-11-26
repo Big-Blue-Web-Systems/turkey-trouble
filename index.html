@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Turkey Trouble</title>
+  <link rel="icon" href="assets/turkey-tile.png" type="image/png" />
+  <link rel="apple-touch-icon" href="assets/turkey-tile.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
@@ -58,8 +60,10 @@
             role="switch"
             aria-checked="false"
           />
-          <span class="capture-mode-radio" aria-hidden="true"></span>
-          <span class="capture-mode-text">Reaction Video</span>
+          <span class="capture-mode-switch" aria-hidden="true">
+            <span class="capture-mode-knob"></span>
+          </span>
+          <span class="capture-mode-text">Video Reaction</span>
         </label>
         <button id="btn-done-players" class="btn btn-start-game" type="button" hidden>Done</button>
       </div>
@@ -86,7 +90,6 @@
 
     <div class="board-row">
       <aside class="reactions-panel" aria-label="Reaction photos">
-        <h2 class="reactions-title">Reactions</h2>
         <button
           type="button"
           id="reactions-prev"
@@ -155,13 +158,14 @@
           </p>
         </section>
       </div>
+
+      <aside id="leaderboard" class="leaderboard" aria-label="Scoreboard">
+        <h2 class="leaderboard-title">Scoreboard</h2>
+        <ol id="leaderboard-list" class="leaderboard-list"></ol>
+        <p id="leaderboard-empty" class="leaderboard-empty">Waiting for players…</p>
+      </aside>
     </div>
   </div>
-
-  <aside id="leaderboard" class="leaderboard" hidden aria-label="Scoreboard">
-    <h2 class="leaderboard-title">Scores</h2>
-    <ol id="leaderboard-list" class="leaderboard-list"></ol>
-  </aside>
 
   <div id="modal-root" class="modal-root" hidden>
     <div class="modal-backdrop" data-modal-ignore></div>

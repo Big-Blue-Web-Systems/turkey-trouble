@@ -576,7 +576,7 @@
         players.splice(index, 1);
         renderPlayerList();
         syncSetupButtons();
-        if (gameStarted) renderLeaderboard();
+        renderLeaderboard();
       });
 
       li.addEventListener("dragstart", () => {
@@ -676,17 +676,22 @@
     return p.banked;
   }
 
-  function syncLeaderboardSpace() {
-    document.body.classList.toggle("has-leaderboard", gameStarted && !leaderboard.hidden);
-  }
+  const leaderboardEmpty = document.getElementById("leaderboard-empty");
 
   function renderLeaderboard() {
-    leaderboard.hidden = !gameStarted;
-    syncLeaderboardSpace();
-    if (!gameStarted) {
+    const showScores = gameStarted && players.length > 0;
+    if (!showScores) {
       leaderboardList.innerHTML = "";
+      if (leaderboardEmpty) {
+        leaderboardEmpty.hidden = false;
+        leaderboardEmpty.textContent = players.length
+          ? "Waiting for game start…"
+          : "Waiting for players…";
+      }
       return;
     }
+
+    if (leaderboardEmpty) leaderboardEmpty.hidden = true;
 
     const ranked = players
       .map((p, index) => ({ p, index, total: playerDisplayTotal(p, index) }))
@@ -1749,7 +1754,7 @@
     playerNameInput.value = "";
     renderPlayerList();
     syncSetupButtons();
-    if (gameStarted) renderLeaderboard();
+    renderLeaderboard();
     playerNameInput.focus();
   });
 
@@ -1822,16 +1827,128 @@
     },
     { passive: true }
   );
-  const onReactionsLayoutChange = () => layoutReactionsStack();
+  const boardRow = document.querySelector(".board-row");
+  const boardFrame = document.querySelector(".board-frame");
+  const reactionsPanel = document.querySelector(".reactions-panel");
+  const stageEl = document.querySelector(".stage");
+
+  function readCssPx(styles, prop) {
+    const raw = styles.getPropertyValue(prop).trim();
+    if (!raw) return 0;
+    if (raw.endsWith("px")) return parseFloat(raw) || 0;
+    if (raw.endsWith("rem")) {
+      const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      return (parseFloat(raw) || 0) * root;
+    }
+    return parseFloat(raw) || 0;
+  }
+
+  function outerHeight(el) {
+    if (!el || el.hidden) return 0;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.height + (parseFloat(s.marginTop) || 0) + (parseFloat(s.marginBottom) || 0);
+  }
+
+  function fitPlayArea() {
+    if (!boardRow || !board || !boardFrame) return;
+
+    const rowStyles = getComputedStyle(boardRow);
+    const bodyStyles = getComputedStyle(document.body);
+    const frameStyles = getComputedStyle(boardFrame);
+
+    const colGap = parseFloat(rowStyles.columnGap) || parseFloat(rowStyles.gap) || 0;
+    const frameMarginY =
+      (parseFloat(frameStyles.marginTop) || 0) + (parseFloat(frameStyles.marginBottom) || 0);
+    const bodyPadBottom = parseFloat(bodyStyles.paddingBottom) || 0;
+    const border = 6;
+    const safety = 6;
+    const horizontal = isReactionsHorizontal();
+    const stageW = stageEl?.clientWidth || document.documentElement.clientWidth;
+    const viewportH = window.visualViewport?.height || window.innerHeight;
+    const rowTop = boardRow.getBoundingClientRect().top;
+
+    // Solve tile size against width + height with interdependent pad/gap/reactions width.
+    let tileW = readCssPx(rowStyles, "--fit-tile-w") || 120;
+    let gap = 8;
+    let pad = 18;
+    let boardInnerW = 480;
+
+    for (let i = 0; i < 5; i++) {
+      gap = Math.max(4.5, Math.min(8, tileW * 0.04));
+      pad = Math.max(10, Math.min(28, tileW * 0.11));
+      const reactionsW = horizontal
+        ? 0
+        : Math.min(240, Math.max(72, tileW * 0.92));
+      const sideGutter = horizontal ? 0 : reactionsW + colGap;
+      const availableFrameW = Math.max(160, stageW - 2 * sideGutter);
+      const availableBoardW = Math.max(140, availableFrameW - 2 * pad);
+
+      let reservedBelow =
+        frameMarginY + 2 * pad + outerHeight(controls) + bodyPadBottom + safety;
+      if (horizontal) {
+        if (reactionsPanel) reservedBelow += outerHeight(reactionsPanel);
+        if (leaderboard) reservedBelow += outerHeight(leaderboard);
+      }
+      const availableBoardH = Math.max(120, viewportH - rowTop - reservedBelow);
+
+      const tileFromW = (availableBoardW - border - 5 * gap) / 4;
+      const tileFromH = (availableBoardH - border - 5 * gap) / (4 * (3 / 5));
+      const next = Math.max(48, Math.min(tileFromW, tileFromH));
+      boardInnerW = 4 * next + 5 * gap + border;
+      if (Math.abs(next - tileW) < 0.25) {
+        tileW = next;
+        break;
+      }
+      tileW = next;
+    }
+
+    gap = Math.max(4.5, Math.min(8, tileW * 0.04));
+    pad = Math.max(10, Math.min(28, tileW * 0.11));
+    boardInnerW = 4 * tileW + 5 * gap + border;
+    const bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
+    const bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
+    const reactionsCol = Math.min(240, Math.max(72, tileW * 0.92));
+
+    boardRow.style.setProperty("--fit-tile-w", `${tileW.toFixed(2)}px`);
+    boardRow.style.setProperty("--board-inner-w", `${boardInnerW.toFixed(2)}px`);
+    boardRow.style.setProperty("--board-pad", `${pad.toFixed(2)}px`);
+    boardRow.style.setProperty("--bulb-radius", `${bulbRadius.toFixed(2)}px`);
+    boardRow.style.setProperty("--bulb-clearance", `${bulbClearance.toFixed(2)}px`);
+    if (!horizontal) {
+      boardRow.style.setProperty("--reactions-col", `${reactionsCol.toFixed(2)}px`);
+    }
+  }
+
+  let fitRaf = 0;
+  function scheduleFitPlayArea() {
+    if (fitRaf) cancelAnimationFrame(fitRaf);
+    fitRaf = requestAnimationFrame(() => {
+      fitRaf = 0;
+      // Two passes: pad/gap change with tile size, so remeasure once.
+      fitPlayArea();
+      fitPlayArea();
+      layoutReactionsStack();
+    });
+  }
+
+  const onReactionsLayoutChange = () => scheduleFitPlayArea();
   if (typeof reactionsLayoutQuery.addEventListener === "function") {
     reactionsLayoutQuery.addEventListener("change", onReactionsLayoutChange);
   } else {
     reactionsLayoutQuery.addListener(onReactionsLayoutChange);
   }
-  window.addEventListener("resize", () => {
-    layoutReactionsStack();
-  });
-  layoutReactionsStack();
+  window.addEventListener("resize", scheduleFitPlayArea);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", scheduleFitPlayArea);
+  }
+  if (typeof ResizeObserver === "function") {
+    const chromeObserver = new ResizeObserver(() => scheduleFitPlayArea());
+    if (stageEl) chromeObserver.observe(stageEl);
+    if (setupPanel) chromeObserver.observe(setupPanel);
+    if (turnHud) chromeObserver.observe(turnHud);
+  }
+  scheduleFitPlayArea();
   window.addEventListener("keydown", (e) => {
     if (e.code === "Escape" && !previewModal.hidden) {
       closeReactionPreview();
@@ -1874,6 +1991,7 @@
   buildBoardLights();
   syncSetupButtons();
   syncTurnHud();
+  renderLeaderboard();
   updateActionButton();
   startCamera();
 
