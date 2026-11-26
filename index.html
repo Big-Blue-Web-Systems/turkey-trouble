@@ -76,26 +76,72 @@
               id="capture-video-toggle"
               type="checkbox"
               role="switch"
-              aria-checked="false"
-            />
-            <span class="capture-mode-switch" aria-hidden="true">
-              <span class="capture-mode-knob"></span>
-            </span>
-            <span class="capture-mode-text">Video Reaction</span>
-          </label>
-          <label class="capture-mode-toggle" for="lobby-music-toggle">
-            <input
-              id="lobby-music-toggle"
-              type="checkbox"
-              role="switch"
               checked
               aria-checked="true"
             />
             <span class="capture-mode-switch" aria-hidden="true">
               <span class="capture-mode-knob"></span>
             </span>
-            <span class="capture-mode-text">Background Music</span>
+            <span class="capture-mode-text">Video Reaction</span>
           </label>
+          <div class="sound-mode-picker" id="sound-mode-picker">
+            <div class="sound-mode-control">
+              <button
+                type="button"
+                id="sound-mode-trigger"
+                class="sound-mode-trigger"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="sound-mode-menu"
+                aria-labelledby="sound-mode-label"
+              >
+                <span id="sound-mode-trigger-icons" class="sound-mode-option-icons" aria-hidden="true">
+                  <span class="sound-mode-icon sound-mode-icon-music"></span>
+                  <span class="sound-mode-plus">+</span>
+                  <span class="sound-mode-icon sound-mode-icon-speaker"></span>
+                </span>
+                <span class="sound-mode-caret" aria-hidden="true"></span>
+              </button>
+              <ul id="sound-mode-menu" class="sound-mode-menu" role="listbox" hidden>
+                <li
+                  role="option"
+                  tabindex="-1"
+                  data-sound-mode="all"
+                  aria-selected="true"
+                >
+                  <span>All</span>
+                  <span class="sound-mode-option-icons" aria-hidden="true">
+                    <span class="sound-mode-icon sound-mode-icon-music"></span>
+                    <span class="sound-mode-plus">+</span>
+                    <span class="sound-mode-icon sound-mode-icon-speaker"></span>
+                  </span>
+                </li>
+                <li
+                  role="option"
+                  tabindex="-1"
+                  data-sound-mode="effects"
+                  aria-selected="false"
+                >
+                  <span>Sound Effects Only</span>
+                  <span class="sound-mode-option-icons" aria-hidden="true">
+                    <span class="sound-mode-icon sound-mode-icon-speaker"></span>
+                  </span>
+                </li>
+                <li
+                  role="option"
+                  tabindex="-1"
+                  data-sound-mode="mute"
+                  aria-selected="false"
+                >
+                  <span>Mute</span>
+                  <span class="sound-mode-option-icons" aria-hidden="true">
+                    <span class="sound-mode-icon sound-mode-icon-mute"></span>
+                  </span>
+                </li>
+              </ul>
+            </div>
+            <span class="sound-mode-label" id="sound-mode-label">Music and Sounds</span>
+          </div>
         </div>
       </div>
       <div id="players-editor" class="players-editor" hidden>
@@ -208,7 +254,6 @@
   <div id="preview-modal" class="preview-modal" hidden>
     <div class="preview-backdrop" id="preview-backdrop"></div>
     <div class="preview-dialog" role="dialog" aria-modal="true" aria-label="Reaction preview">
-      <button id="preview-close" class="preview-close" type="button" aria-label="Close preview">×</button>
       <div class="preview-frame">
         <img id="preview-image" class="preview-image" alt="Reaction preview" />
         <img
@@ -217,14 +262,28 @@
           alt="Selected frame"
           hidden
         />
-        <button id="preview-download" class="dl-circle" type="button" aria-label="Download reaction">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
-            <path
-              fill="currentColor"
-              d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"
-            />
-          </svg>
-        </button>
+        <button id="preview-close" class="preview-close" type="button" aria-label="Close preview">×</button>
+        <div class="dl-actions" id="preview-download-actions">
+          <button
+            id="preview-download-image"
+            class="dl-circle"
+            type="button"
+            aria-label="Download selected frame"
+            title="Download image"
+          >
+            <span class="dl-icon dl-icon-image" aria-hidden="true"></span>
+          </button>
+          <button
+            id="preview-download-video"
+            class="dl-circle"
+            type="button"
+            aria-label="Download reaction video"
+            title="Download video"
+            hidden
+          >
+            <span class="dl-icon dl-icon-video" aria-hidden="true"></span>
+          </button>
+        </div>
       </div>
       <div id="preview-clip" class="clip-player" hidden>
         <div class="clip-toolbar">

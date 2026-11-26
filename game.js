@@ -83,8 +83,27 @@
   const scoreboard = document.getElementById("scoreboard");
   const roundLabel = document.getElementById("round-label");
   const captureVideoToggle = document.getElementById("capture-video-toggle");
-  const lobbyMusicToggle = document.getElementById("lobby-music-toggle");
-  let lobbyMusicEnabled = !lobbyMusicToggle || lobbyMusicToggle.checked;
+  const soundModePicker = document.getElementById("sound-mode-picker");
+  const soundModeTrigger = document.getElementById("sound-mode-trigger");
+  const soundModeTriggerIcons = document.getElementById("sound-mode-trigger-icons");
+  const soundModeMenu = document.getElementById("sound-mode-menu");
+  /** @type {"all" | "effects" | "mute"} */
+  let soundMode = "all";
+  const SOUND_MODE_META = {
+    all: {
+      label: "All",
+      iconsHtml:
+        '<span class="sound-mode-icon sound-mode-icon-music"></span><span class="sound-mode-plus">+</span><span class="sound-mode-icon sound-mode-icon-speaker"></span>',
+    },
+    effects: {
+      label: "Sound Effects Only",
+      iconsHtml: '<span class="sound-mode-icon sound-mode-icon-speaker"></span>',
+    },
+    mute: {
+      label: "Mute",
+      iconsHtml: '<span class="sound-mode-icon sound-mode-icon-mute"></span>',
+    },
+  };
   let selectedRounds = 1;
   const leaderboard = document.getElementById("leaderboard");
   const leaderboardList = document.getElementById("leaderboard-list");
@@ -96,7 +115,8 @@
   const previewModal = document.getElementById("preview-modal");
   const previewBackdrop = document.getElementById("preview-backdrop");
   const previewImage = document.getElementById("preview-image");
-  const previewDownload = document.getElementById("preview-download");
+  const previewDownloadImage = document.getElementById("preview-download-image");
+  const previewDownloadVideo = document.getElementById("preview-download-video");
   const previewClose = document.getElementById("preview-close");
   const previewClip = document.getElementById("preview-clip");
   const previewPlay = document.getElementById("preview-play");
@@ -106,7 +126,7 @@
   const previewSelectStatus = document.getElementById("preview-select-status");
   const previewPip = document.getElementById("preview-pip");
   let previewDataUrl = "";
-  let previewFilename = "reaction.jpg";
+  let previewFilename = "reaction.png";
   /** @type {ReturnType<typeof createClipPlayer>|null} */
   let previewClipPlayer = null;
   /** @type {{dataUrl:string,frames?:string[],frameIndex?:number,selectedFrameIndex?:number,isClip?:boolean,label:string,bust:boolean}|null} */
@@ -687,6 +707,7 @@
 
   function openRoundsMenu() {
     if (gameStarted || roundsTrigger.disabled) return;
+    closeSoundModeMenu();
     roundsMenu.hidden = false;
     roundsTrigger.setAttribute("aria-expanded", "true");
   }
@@ -885,15 +906,97 @@
   cardFlipSfx.volume = 0.75;
   cardFlipSfx.addEventListener("ended", () => syncLobbyMusic());
 
+  function lobbyMusicAllowed() {
+    return soundMode === "all";
+  }
+
+  function effectsAllowed() {
+    return soundMode !== "mute";
+  }
+
   function isOverlayClipPlaying() {
     return [fireVideo, bustVideo].some((v) => v && v.classList.contains("is-showing"));
   }
 
   function isCardFlipSfxPlaying() {
-    return !cardFlipSfx.paused && !cardFlipSfx.ended;
+    return effectsAllowed() && !cardFlipSfx.paused && !cardFlipSfx.ended;
+  }
+
+  function stopCardFlipSfx() {
+    try {
+      cardFlipSfx.pause();
+      cardFlipSfx.currentTime = 0;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function silenceSpinTicks() {
+    if (!gobbleGain) return;
+    try {
+      gobbleGain.gain.setValueAtTime(0, audioCtx?.currentTime || 0);
+      gobbleGain.disconnect();
+    } catch (_) {
+      /* ignore */
+    }
+    gobbleGain = null;
+  }
+
+  function syncOverlayClipMute() {
+    const muted = !effectsAllowed();
+    [fireVideo, bustVideo].forEach((video) => {
+      if (video && video.classList.contains("is-showing")) video.muted = muted;
+    });
+  }
+
+  function closeSoundModeMenu() {
+    if (!soundModeMenu || !soundModeTrigger) return;
+    soundModeMenu.hidden = true;
+    soundModeTrigger.setAttribute("aria-expanded", "false");
+  }
+
+  function openSoundModeMenu() {
+    if (!soundModeMenu || !soundModeTrigger) return;
+    closeRoundsMenu();
+    soundModeMenu.hidden = false;
+    soundModeTrigger.setAttribute("aria-expanded", "true");
+  }
+
+  function toggleSoundModeMenu() {
+    if (!soundModeMenu) return;
+    if (soundModeMenu.hidden) openSoundModeMenu();
+    else closeSoundModeMenu();
+  }
+
+  function syncSoundModeToggle() {
+    const meta = SOUND_MODE_META[soundMode] || SOUND_MODE_META.all;
+    if (soundModeTriggerIcons) soundModeTriggerIcons.innerHTML = meta.iconsHtml;
+    if (soundModeTrigger) {
+      soundModeTrigger.setAttribute("aria-label", `${meta.label}. Music and Sounds`);
+      soundModeTrigger.title = meta.label;
+    }
+    soundModeMenu?.querySelectorAll("[data-sound-mode]").forEach((opt) => {
+      const on = opt.getAttribute("data-sound-mode") === soundMode;
+      opt.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+
+  function setSoundMode(mode) {
+    if (mode !== "all" && mode !== "effects" && mode !== "mute") return;
+    soundMode = mode;
+    syncSoundModeToggle();
+    closeSoundModeMenu();
+    if (!effectsAllowed()) {
+      stopCardFlipSfx();
+      silenceSpinTicks();
+    }
+    syncOverlayClipMute();
+    if (lobbyMusicAllowed()) unlockLobbyMusic();
+    else syncLobbyMusic();
   }
 
   function playCardFlipSfx() {
+    if (!effectsAllowed()) return;
     try {
       cardFlipSfx.pause();
       cardFlipSfx.currentTime = 0;
@@ -907,7 +1010,7 @@
 
   function syncLobbyMusic() {
     const shouldPlay =
-      lobbyMusicEnabled &&
+      lobbyMusicAllowed() &&
       !document.hidden &&
       !spinning &&
       !isOverlayClipPlaying() &&
@@ -921,23 +1024,13 @@
     if (playAttempt) playAttempt.catch(() => {});
   }
 
-  function setLobbyMusicEnabled(on) {
-    lobbyMusicEnabled = !!on;
-    if (lobbyMusicToggle) {
-      lobbyMusicToggle.checked = lobbyMusicEnabled;
-      lobbyMusicToggle.setAttribute("aria-checked", lobbyMusicEnabled ? "true" : "false");
-    }
-    if (lobbyMusicEnabled) unlockLobbyMusic();
-    else syncLobbyMusic();
-  }
-
   function unlockLobbyMusic() {
     ensureAudio();
     syncLobbyMusic();
   }
 
   function playGobble() {
-    if (!spinning) return;
+    if (!spinning || !effectsAllowed()) return;
     ensureAudio();
 
     // Cut any overlapping tick so spins don't become a noise bed
@@ -1070,7 +1163,7 @@
       turkeyBlast.setAttribute("aria-hidden", "false");
       cameraWell.classList.add("is-blasting");
       video.classList.add("is-showing");
-      video.muted = false;
+      video.muted = !effectsAllowed();
       video.playsInline = true;
       video.onended = finish;
       video.onerror = finish;
@@ -1092,6 +1185,7 @@
             finish();
           }
         }
+        if (!effectsAllowed()) video.muted = true;
         syncLobbyMusic();
       };
 
@@ -1342,8 +1436,30 @@
     };
   }
 
-  function drawReactionFrame(ctx, w, h, crop) {
+  function getBannerEl() {
+    return bannerImage.complete && bannerImage.naturalWidth ? bannerImage : cameraBorder;
+  }
+
+  /** Export / capture size: at least the border PNG’s native resolution, same aspect as the cover crop. */
+  function getReactionOutputSize(srcW, srcH) {
+    const banner = getBannerEl();
+    const bw = banner?.naturalWidth || 0;
+    const bh = banner?.naturalHeight || 0;
+    if (!srcW || !srcH) {
+      return { w: Math.max(1, bw || 640), h: Math.max(1, bh || 480) };
+    }
+    if (!bw || !bh) return { w: srcW, h: srcH };
+    const scale = Math.max(bw / srcW, bh / srcH, 1);
+    return {
+      w: Math.max(1, Math.round(srcW * scale)),
+      h: Math.max(1, Math.round(srcH * scale)),
+    };
+  }
+
+  function drawReactionCamera(ctx, w, h, crop) {
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.translate(w, 0);
     ctx.scale(-1, 1);
     if (crop) {
@@ -1352,21 +1468,56 @@
       ctx.drawImage(camera, 0, 0, w, h);
     }
     ctx.restore();
+  }
 
-    const banner = bannerImage.complete && bannerImage.naturalWidth ? bannerImage : cameraBorder;
-    if (banner && banner.naturalWidth) {
-      ctx.drawImage(banner, 0, 0, w, h);
+  function drawImageCover(ctx, img, dw, dh) {
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    if (!iw || !ih) {
+      ctx.drawImage(img, 0, 0, dw, dh);
+      return;
     }
+    const ir = iw / ih;
+    const dr = dw / dh;
+    let sx;
+    let sy;
+    let sw;
+    let sh;
+    if (ir > dr) {
+      sh = ih;
+      sw = ih * dr;
+      sx = (iw - sw) / 2;
+      sy = 0;
+    } else {
+      sw = iw;
+      sh = iw / dr;
+      sx = 0;
+      sy = (ih - sh) / 2;
+    }
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+  }
+
+  function stampBannerOnCanvas(ctx, w, h) {
+    const banner = getBannerEl();
+    if (!banner?.naturalWidth) return;
+    // Draw the PNG at the canvas size; when canvas matches banner native size this is 1:1.
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(banner, 0, 0, w, h);
   }
 
   function grabReactionFrameDataUrl() {
     if (!camera.srcObject) return null;
     const crop = getReactionCoverCrop();
-    captureCanvas.width = crop.w;
-    captureCanvas.height = crop.h;
+    const out = getReactionOutputSize(crop.w, crop.h);
+    captureCanvas.width = out.w;
+    captureCanvas.height = out.h;
     const ctx = captureCanvas.getContext("2d");
-    drawReactionFrame(ctx, crop.w, crop.h, crop);
-    return captureCanvas.toDataURL("image/jpeg", 0.8);
+    // Camera only — border is overlaid in CSS for display and stamped fresh on download.
+    drawReactionCamera(ctx, out.w, out.h, crop);
+    return captureCanvas.toDataURL("image/jpeg", 0.95);
   }
 
   function formatClipTimestamp(frameIndex) {
@@ -1412,10 +1563,21 @@
    *   timeEl: HTMLElement,
    *   pipEl?: HTMLImageElement|null,
    *   hoverRoot?: HTMLElement|null,
+   *   autoplayOnHover?: boolean,
    *   onFrameChange?: (url:string)=>void,
    * }} opts
    */
-  function createClipPlayer({ reaction, imgEl, playBtn, scrubEl, timeEl, pipEl, hoverRoot, onFrameChange }) {
+  function createClipPlayer({
+    reaction,
+    imgEl,
+    playBtn,
+    scrubEl,
+    timeEl,
+    pipEl,
+    hoverRoot,
+    autoplayOnHover = true,
+    onFrameChange,
+  }) {
     const frames = reaction?.frames || [];
     const last = Math.max(0, frames.length - 1);
     const interval = Math.round(1000 / REACTION_CLIP_FPS);
@@ -1458,16 +1620,20 @@
       playBtn.setAttribute("aria-label", "Play");
     }
 
+    /** Always starts at frame 0, plays through once, then stops on the last frame. */
     function play() {
       if (destroyed || frames.length < 2 || playing) return;
+      showPlayhead(0);
       playing = true;
       playBtn.textContent = "❚❚";
       playBtn.setAttribute("aria-label", "Pause");
       const tick = () => {
         if (!playing || destroyed) return;
-        let next = playhead + 1;
-        if (next > last) next = 0;
-        showPlayhead(next);
+        if (playhead >= last) {
+          pause();
+          return;
+        }
+        showPlayhead(playhead + 1);
         timer = setTimeout(tick, interval);
       };
       timer = setTimeout(tick, interval);
@@ -1506,7 +1672,8 @@
 
     playBtn.addEventListener("click", onPlayClick);
     scrubEl.addEventListener("input", onScrubInput);
-    if (hoverRoot) {
+    const hoverEnabled = autoplayOnHover && hoverRoot;
+    if (hoverEnabled) {
       hoverRoot.addEventListener("mouseenter", onEnter);
       hoverRoot.addEventListener("mouseleave", onLeave);
     }
@@ -1523,7 +1690,7 @@
         pause();
         playBtn.removeEventListener("click", onPlayClick);
         scrubEl.removeEventListener("input", onScrubInput);
-        if (hoverRoot) {
+        if (hoverEnabled) {
           hoverRoot.removeEventListener("mouseenter", onEnter);
           hoverRoot.removeEventListener("mouseleave", onLeave);
         }
@@ -1608,7 +1775,7 @@
       <div class="meta"><strong>${escapeHtml(reaction.label)}</strong>${escapeHtml(name)}</div>
     `;
     card.addEventListener("click", () => {
-      openReactionPreview(reaction, `${name}-reaction.jpg`);
+      openReactionPreview(reaction, `${name}-reaction.png`);
     });
     reactionStrip.prepend(card);
     reactionFocusIndex = 0;
@@ -1721,27 +1888,155 @@
     return selectReactionFrame(reaction, index);
   }
 
+  function loadImageFromUrl(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+  }
+
+  function pngDownloadName(filename) {
+    return String(filename || "reaction.png").replace(/\.(jpg|jpeg|webp)$/i, ".png");
+  }
+
   function downloadReactionWithBanner(dataUrl, filename) {
     const img = new Image();
     img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth || 640;
-      canvas.height = img.naturalHeight || 480;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      // If this snapshot was captured before banner compositing, stamp the frame on download.
-      // Fresh captures already include the banner; drawing it again is a no-op visually on opaque art.
-      const banner = bannerImage.complete && bannerImage.naturalWidth ? bannerImage : cameraBorder;
-      if (banner && banner.naturalWidth) {
-        ctx.drawImage(banner, 0, 0, canvas.width, canvas.height);
+      const srcW = img.naturalWidth || 640;
+      const srcH = img.naturalHeight || 480;
+      const banner = getBannerEl();
+      // Prefer the border PNG’s native pixel grid so the frame stays crisp.
+      let outW;
+      let outH;
+      if (banner?.naturalWidth && banner?.naturalHeight) {
+        outW = banner.naturalWidth;
+        outH = banner.naturalHeight;
+      } else {
+        const sized = getReactionOutputSize(srcW, srcH);
+        outW = sized.w;
+        outH = sized.h;
       }
-
-      downloadDataUrl(canvas.toDataURL("image/jpeg", 0.92), filename);
+      const canvas = document.createElement("canvas");
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext("2d");
+      drawImageCover(ctx, img, outW, outH);
+      // Stamp the original PNG last so JPEG camera compression never touches the border.
+      stampBannerOnCanvas(ctx, outW, outH);
+      downloadDataUrl(canvas.toDataURL("image/png"), pngDownloadName(filename));
     };
-    img.onerror = () => downloadDataUrl(dataUrl, filename);
+    img.onerror = () => downloadDataUrl(dataUrl, pngDownloadName(filename));
     img.src = dataUrl;
   }
+
+  function pickRecorderMimeType() {
+    const types = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+      "video/mp4",
+    ];
+    if (typeof MediaRecorder === "undefined") return "";
+    return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  function reactionHasClip(reaction) {
+    return Array.isArray(reaction?.frames) && reaction.frames.length > 1;
+  }
+
+  function showVideoDownloadControls() {
+    return isReactionVideoMode();
+  }
+
+  async function downloadReactionVideo(reaction, filename) {
+    const frames = reaction?.frames?.length ? reaction.frames : null;
+    if (!frames?.length) {
+      downloadReactionWithBanner(reactionDisplayUrl(reaction), filename.replace(/\.(webm|mp4)$/i, ".png"));
+      return;
+    }
+    if (typeof MediaRecorder === "undefined" || !HTMLCanvasElement.prototype.captureStream) {
+      downloadReactionWithBanner(
+        frames[ensureSelectedFrameIndex(reaction)] || frames[0],
+        filename.replace(/\.(webm|mp4)$/i, ".png")
+      );
+      return;
+    }
+
+    const first = await loadImageFromUrl(frames[0]);
+    const banner = getBannerEl();
+    const srcW = first.naturalWidth || 640;
+    const srcH = first.naturalHeight || 480;
+    let outW;
+    let outH;
+    if (banner?.naturalWidth && banner?.naturalHeight) {
+      outW = banner.naturalWidth;
+      outH = banner.naturalHeight;
+    } else {
+      const sized = getReactionOutputSize(srcW, srcH);
+      outW = sized.w;
+      outH = sized.h;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    const stream = canvas.captureStream(REACTION_CLIP_FPS);
+    const mimeType = pickRecorderMimeType();
+    const recorder = mimeType
+      ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12000000 })
+      : new MediaRecorder(stream, { videoBitsPerSecond: 12000000 });
+    const chunks = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size) chunks.push(e.data);
+    };
+    const stopped = new Promise((resolve) => {
+      recorder.onstop = resolve;
+    });
+
+    const paintFrame = (frameImg) => {
+      ctx.clearRect(0, 0, outW, outH);
+      drawImageCover(ctx, frameImg, outW, outH);
+      stampBannerOnCanvas(ctx, outW, outH);
+    };
+
+    paintFrame(first);
+    recorder.start(100);
+
+    const frameDelay = Math.round(1000 / REACTION_CLIP_FPS);
+    for (let i = 1; i < frames.length; i += 1) {
+      await waitMs(frameDelay);
+      const frameImg = await loadImageFromUrl(frames[i]);
+      paintFrame(frameImg);
+    }
+    await waitMs(frameDelay);
+    recorder.stop();
+    stream.getTracks().forEach((t) => t.stop());
+    await stopped;
+
+    const outType = recorder.mimeType || mimeType || "video/webm";
+    const ext = outType.includes("mp4") ? "mp4" : "webm";
+    const base = String(filename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
+    downloadBlob(new Blob(chunks, { type: outType }), `${base}.${ext}`);
+  }
+
+  function syncPreviewDownloadButtons() {
+    if (previewDownloadVideo) previewDownloadVideo.hidden = !showVideoDownloadControls();
+  }
+
+  const DL_IMAGE_ICON = `<span class="dl-icon dl-icon-image" aria-hidden="true"></span>`;
+  const DL_VIDEO_ICON = `<span class="dl-icon dl-icon-video" aria-hidden="true"></span>`;
 
   function openReactionPreview(reactionOrUrl, filename) {
     // Available anytime except mid-spin (stacks over end-turn gallery)
@@ -1758,11 +2053,11 @@
         : { dataUrl: reactionOrUrl, label: "", bust: false };
     previewReaction = reaction;
     previewDataUrl = reactionDisplayUrl(reaction);
-    previewFilename = filename || "reaction.jpg";
+    previewFilename = pngDownloadName(filename || "reaction.png");
     previewImage.src = previewDataUrl;
     if (previewSelectStatus) previewSelectStatus.hidden = true;
 
-    const hasClip = Array.isArray(reaction.frames) && reaction.frames.length > 1;
+    const hasClip = reactionHasClip(reaction);
     if (previewClip) previewClip.hidden = !hasClip;
     if (previewPip) {
       if (hasClip) updatePipEl(previewPip, reaction);
@@ -1771,6 +2066,7 @@
         previewPip.removeAttribute("src");
       }
     }
+    syncPreviewDownloadButtons();
     if (hasClip && previewPlay && previewScrub && previewTime) {
       previewClipPlayer = createClipPlayer({
         reaction,
@@ -1779,7 +2075,8 @@
         scrubEl: previewScrub,
         timeEl: previewTime,
         pipEl: previewPip,
-        hoverRoot: previewImage.parentElement || previewImage,
+        hoverRoot: null,
+        autoplayOnHover: false,
         onFrameChange: () => {
           // playhead changes don't change the selected thumbnail / download target
           previewDataUrl = reactionDisplayUrl(reaction);
@@ -1789,15 +2086,6 @@
 
     previewModal.hidden = false;
   }
-
-  const DOWNLOAD_ICON_SVG = `
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
-      <path
-        fill="currentColor"
-        d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"
-      />
-    </svg>
-  `;
 
   function closeReactionPreview() {
     if (previewClipPlayer) {
@@ -1990,8 +2278,9 @@
 
     modalBody.innerHTML = "";
     entries.forEach((r, i) => {
-      const filename = `${player.name}-reaction-${i + 1}.jpg`;
-      const hasClip = Array.isArray(r.frames) && r.frames.length > 1;
+      const filename = `${player.name}-reaction-${i + 1}.png`;
+      const hasClip = reactionHasClip(r);
+      const showVideoDl = showVideoDownloadControls();
       const currentUrl = reactionDisplayUrl(r);
       const item = document.createElement("div");
       item.className = "gallery-item" + (multi && i === selectedFavoriteIndex ? " is-selected" : "");
@@ -2008,7 +2297,14 @@
               ? `<img class="clip-pip" data-clip-pip src="${currentUrl}" alt="Selected frame" />`
               : ""
           }
-          <button type="button" class="dl-circle" aria-label="Download">${DOWNLOAD_ICON_SVG}</button>
+          <div class="dl-actions">
+            <button type="button" class="dl-circle" data-dl="image" aria-label="Download image" title="Download image">${DL_IMAGE_ICON}</button>
+            ${
+              showVideoDl
+                ? `<button type="button" class="dl-circle" data-dl="video" aria-label="Download video" title="Download video">${DL_VIDEO_ICON}</button>`
+                : ""
+            }
+          </div>
         </div>
         ${hasClip ? buildClipPlayerMarkup(r) : ""}
         <div class="g-meta"><strong>${escapeHtml(r.label)}</strong>${r.bust ? "Bust" : r.isPriorFavorite ? "Saved" : "Hit"}</div>
@@ -2037,9 +2333,13 @@
           renderGalleryActions(player);
         });
       }
-      item.querySelector(".dl-circle").addEventListener("click", (e) => {
+      item.querySelector('[data-dl="image"]')?.addEventListener("click", (e) => {
         e.stopPropagation();
         downloadReactionWithBanner(reactionDisplayUrl(r), filename);
+      });
+      item.querySelector('[data-dl="video"]')?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        downloadReactionVideo(r, `${player.name}-reaction-${i + 1}.webm`);
       });
       modalBody.appendChild(item);
     });
@@ -2058,7 +2358,7 @@
     dlAll.disabled = entries.length === 0;
     dlAll.addEventListener("click", () => {
       entries.forEach((r, i) => {
-        downloadReactionWithBanner(reactionDisplayUrl(r), `${player.name}-reaction-${i + 1}.jpg`);
+        downloadReactionWithBanner(reactionDisplayUrl(r), `${player.name}-reaction-${i + 1}.png`);
       });
     });
 
@@ -2297,12 +2597,19 @@
   captureVideoToggle?.addEventListener("change", () => {
     captureVideoToggle.setAttribute("aria-checked", captureVideoToggle.checked ? "true" : "false");
   });
-  lobbyMusicToggle?.addEventListener("change", () => {
-    setLobbyMusicEnabled(lobbyMusicToggle.checked);
+  soundModeTrigger?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSoundModeMenu();
+  });
+  soundModeMenu?.addEventListener("click", (e) => {
+    const opt = e.target.closest("[data-sound-mode]");
+    if (!opt) return;
+    setSoundMode(opt.getAttribute("data-sound-mode"));
   });
 
   roundsTrigger.addEventListener("click", (e) => {
     e.stopPropagation();
+    closeSoundModeMenu();
     toggleRoundsMenu();
   });
   roundsMenu.addEventListener("click", (e) => {
@@ -2313,14 +2620,21 @@
   });
   document.addEventListener("click", (e) => {
     if (!roundsPicker.contains(e.target)) closeRoundsMenu();
+    if (soundModePicker && !soundModePicker.contains(e.target)) closeSoundModeMenu();
   });
   window.addEventListener("keydown", (e) => {
-    if (e.code === "Escape" && !roundsMenu.hidden) {
+    if (e.code !== "Escape") return;
+    if (!roundsMenu.hidden) {
       closeRoundsMenu();
       roundsTrigger.focus();
     }
+    if (soundModeMenu && !soundModeMenu.hidden) {
+      closeSoundModeMenu();
+      soundModeTrigger?.focus();
+    }
   });
   setSelectedRounds(1);
+  syncSoundModeToggle();
 
   addPlayerForm.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -2349,9 +2663,15 @@
   previewModal.addEventListener("click", (e) => {
     if (e.target === previewModal) closeReactionPreview();
   });
-  previewDownload.addEventListener("click", (e) => {
+  previewDownloadImage?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (previewDataUrl) downloadReactionWithBanner(previewDataUrl, previewFilename);
+    if (previewDataUrl) downloadReactionWithBanner(previewDataUrl, previewFilename || "reaction.png");
+  });
+  previewDownloadVideo?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!previewReaction) return;
+    const base = String(previewFilename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
+    downloadReactionVideo(previewReaction, `${base}.webm`);
   });
   previewSelectFrame?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -2592,6 +2912,7 @@
   renderLeaderboard();
   updateActionButton();
   startCamera();
+  syncSoundModeToggle();
   syncLobbyMusic();
 
   document.addEventListener(
