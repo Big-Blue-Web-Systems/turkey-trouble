@@ -3151,52 +3151,29 @@
     return String(filename || "reaction.png").replace(/\.(jpg|jpeg|webp)$/i, ".png");
   }
 
-  function downloadReactionWithBanner(reactionOrUrl, filename) {
-    const reaction =
-      reactionOrUrl && typeof reactionOrUrl === "object"
-        ? reactionOrUrl
-        : { dataUrl: reactionOrUrl };
-    const dataUrl = reactionDisplayUrl(reaction) || reaction.dataUrl;
-    if (!dataUrl) return;
-    const img = new Image();
-    img.onload = () => {
-      const srcW = img.naturalWidth || 640;
-      const srcH = img.naturalHeight || 480;
-      const banner = getBannerEl();
-      // Prefer the border PNG’s native pixel grid so the frame stays crisp.
-      let outW;
-      let outH;
-      if (banner?.naturalWidth && banner?.naturalHeight) {
-        outW = banner.naturalWidth;
-        outH = banner.naturalHeight;
-      } else {
-        const sized = getReactionOutputSize(srcW, srcH);
-        outW = sized.w;
-        outH = sized.h;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = outW;
-      canvas.height = outH;
-      const ctx = canvas.getContext("2d");
-      drawImageCover(ctx, img, outW, outH);
-      // Stamp the original PNG last so JPEG camera compression never touches the border.
-      stampBannerOnCanvas(ctx, outW, outH);
-      stampReactionHudOnCanvas(ctx, outW, outH, reaction);
-      downloadDataUrl(canvas.toDataURL("image/png"), pngDownloadName(filename));
-    };
-    img.onerror = () => downloadDataUrl(dataUrl, pngDownloadName(filename));
-    img.src = dataUrl;
+  function mimeFromFilename(filename) {
+    const name = String(filename || "").toLowerCase();
+    if (name.endsWith(".png")) return "image/png";
+    if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+    if (name.endsWith(".webp")) return "image/webp";
+    if (name.endsWith(".mp4")) return "video/mp4";
+    if (name.endsWith(".webm")) return "video/webm";
+    return "application/octet-stream";
   }
 
-  function pickRecorderMimeType() {
-    const types = [
-      "video/webm;codecs=vp9",
-      "video/webm;codecs=vp8",
-      "video/webm",
-      "video/mp4",
-    ];
-    if (typeof MediaRecorder === "undefined") return "";
-    return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  function isLikelyMobileDevice() {
+    return (
+      window.matchMedia("(hover: none) and (pointer: coarse)").matches ||
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "")
+    );
+  }
+
+  function isEmbeddedFrame() {
+    try {
+      return !!(window.parent && window.parent !== window);
+    } catch (_) {
+      return true;
+    }
   }
 
   /**
@@ -3205,7 +3182,7 @@
    */
   function requestHostDownload(payload) {
     try {
-      if (!window.parent || window.parent === window) return false;
+      if (!isEmbeddedFrame()) return false;
       window.parent.postMessage(
         { source: "turkey-trouble", type: "download", ...payload },
         "*",
@@ -3217,43 +3194,274 @@
     }
   }
 
-  function downloadBlob(blob, filename) {
-    if (blob && typeof blob.arrayBuffer === "function") {
-      blob.arrayBuffer().then((buffer) => {
-        if (
-          requestHostDownload({
-            filename,
-            mime: blob.type || "application/octet-stream",
-            buffer,
-          })
-        ) {
-          return;
-        }
-        const url = URL.createObjectURL(new Blob([buffer], { type: blob.type }));
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1500);
-      }).catch(() => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1500);
-      });
-      return;
-    }
+  function triggerAnchorDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2500);
+  }
+
+  function canvasToBlob(canvas, type = "image/png", quality) {
+    return new Promise((resolve) => {
+      if (canvas.toBlob) {
+        canvas.toBlob((blob) => resolve(blob), type, quality);
+        return;
+      }
+      try {
+        const dataUrl = canvas.toDataURL(type, quality);
+        resolve(dataUrlToBlob(dataUrl));
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    try {
+      const parts = String(dataUrl).split(",");
+      const header = parts[0] || "";
+      const b64 = parts[1] || "";
+      const mime = /data:([^;]+)/.exec(header)?.[1] || "application/octet-stream";
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: mime });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function filesFromSaveEntries(entries) {
+    return entries.map(({ blob, filename }) => {
+      const name = String(filename || "reaction.bin");
+      const type = blob.type || mimeFromFilename(name);
+      return new File([blob], name, { type });
+    });
+  }
+
+  async function tryShareFiles(entries) {
+    if (typeof navigator.share !== "function" || typeof File === "undefined") {
+      return false;
+    }
+    const files = filesFromSaveEntries(entries);
+    if (!files.length) return false;
+    const data = { files, title: "Turkey Trouble" };
+    try {
+      if (typeof navigator.canShare === "function" && !navigator.canShare(data)) {
+        return false;
+      }
+    } catch (_) {
+      return false;
+    }
+    try {
+      await navigator.share(data);
+      return true;
+    } catch (err) {
+      if (err && err.name === "AbortError") return true;
+      return false;
+    }
+  }
+
+  async function tryHostDownloadEntries(entries) {
+    if (!isEmbeddedFrame() || !entries.length) return false;
+    try {
+      if (entries.length === 1) {
+        const { blob, filename } = entries[0];
+        const buffer = await blob.arrayBuffer();
+        return requestHostDownload({
+          filename,
+          mime: blob.type || mimeFromFilename(filename),
+          buffer,
+        });
+      }
+      // Multi-file: send each; host can save sequentially
+      for (const { blob, filename } of entries) {
+        const buffer = await blob.arrayBuffer();
+        requestHostDownload({
+          filename,
+          mime: blob.type || mimeFromFilename(filename),
+          buffer,
+        });
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  const saveSheet = document.getElementById("save-sheet");
+  const saveSheetBackdrop = document.getElementById("save-sheet-backdrop");
+  const saveSheetImage = document.getElementById("save-sheet-image");
+  const saveSheetVideo = document.getElementById("save-sheet-video");
+  const saveSheetHint = document.getElementById("save-sheet-hint");
+  const saveSheetConfirm = document.getElementById("save-sheet-confirm");
+  const saveSheetCancel = document.getElementById("save-sheet-cancel");
+  /** @type {{ blob: Blob, filename: string }[] | null} */
+  let pendingSaveEntries = null;
+  let pendingSaveObjectUrl = null;
+
+  function clearSaveSheetPreview() {
+    if (pendingSaveObjectUrl) {
+      URL.revokeObjectURL(pendingSaveObjectUrl);
+      pendingSaveObjectUrl = null;
+    }
+    if (saveSheetImage) {
+      saveSheetImage.hidden = true;
+      saveSheetImage.removeAttribute("src");
+    }
+    if (saveSheetVideo) {
+      saveSheetVideo.pause?.();
+      saveSheetVideo.hidden = true;
+      saveSheetVideo.removeAttribute("src");
+      saveSheetVideo.load?.();
+    }
+  }
+
+  function closeSaveSheet() {
+    clearSaveSheetPreview();
+    pendingSaveEntries = null;
+    if (saveSheet) {
+      saveSheet.hidden = true;
+    }
+  }
+
+  function openSaveSheet(entries) {
+    if (!saveSheet || !entries?.length) return;
+    clearSaveSheetPreview();
+    pendingSaveEntries = entries;
+    const primary = entries[0];
+    const isVideo = /^video\//.test(primary.blob.type || "") || /\.(mp4|webm)$/i.test(primary.filename);
+    pendingSaveObjectUrl = URL.createObjectURL(primary.blob);
+
+    if (isVideo && saveSheetVideo) {
+      saveSheetVideo.src = pendingSaveObjectUrl;
+      saveSheetVideo.hidden = false;
+      if (saveSheetHint) {
+        saveSheetHint.textContent =
+          entries.length > 1
+            ? "Tap Save to share all clips, then choose Save Video."
+            : "Tap Save, then choose Save Video. Or press and hold the preview.";
+      }
+    } else if (saveSheetImage) {
+      saveSheetImage.src = pendingSaveObjectUrl;
+      saveSheetImage.hidden = false;
+      if (saveSheetHint) {
+        saveSheetHint.textContent =
+          entries.length > 1
+            ? "Tap Save to share all photos, then choose Save Image."
+            : "Tap Save, then choose Save Image. Or press and hold the preview.";
+      }
+    }
+
+    saveSheet.hidden = false;
+  }
+
+  async function confirmSaveSheet() {
+    const entries = pendingSaveEntries;
+    if (!entries?.length) {
+      closeSaveSheet();
+      return;
+    }
+    // Fresh tap → share / download with a valid user gesture
+    if (await tryShareFiles(entries)) {
+      closeSaveSheet();
+      return;
+    }
+    if (await tryHostDownloadEntries(entries)) {
+      closeSaveSheet();
+      return;
+    }
+    entries.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
+    closeSaveSheet();
+  }
+
+  /**
+   * Cross-device save.
+   * Mobile: always show Save-to-Camera-Roll prompt (fresh tap → Web Share).
+   * Desktop: Web Share if available, else host iframe / anchor download.
+   * @param {{ blob: Blob, filename: string }[]} entries
+   */
+  async function saveFilesToDevice(entries) {
+    const list = (entries || []).filter((e) => e?.blob);
+    if (!list.length) return;
+
+    // After async render/encode the original tap's gesture is gone — prompt first.
+    if (isLikelyMobileDevice()) {
+      openSaveSheet(list);
+      return;
+    }
+
+    if (await tryShareFiles(list)) return;
+    if (await tryHostDownloadEntries(list)) return;
+    list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
+  }
+
+  async function saveBlobToDevice(blob, filename) {
+    if (!blob) return;
+    await saveFilesToDevice([{ blob, filename }]);
+  }
+
+  async function renderReactionPngBlob(reactionOrUrl) {
+    const reaction =
+      reactionOrUrl && typeof reactionOrUrl === "object"
+        ? reactionOrUrl
+        : { dataUrl: reactionOrUrl };
+    const dataUrl = reactionDisplayUrl(reaction) || reaction.dataUrl;
+    if (!dataUrl) return null;
+
+    let img;
+    try {
+      img = await loadImageFromUrl(dataUrl);
+    } catch (_) {
+      return dataUrlToBlob(dataUrl);
+    }
+
+    const srcW = img.naturalWidth || 640;
+    const srcH = img.naturalHeight || 480;
+    const banner = getBannerEl();
+    // Prefer the border PNG’s native pixel grid so the frame stays crisp.
+    let outW;
+    let outH;
+    if (banner?.naturalWidth && banner?.naturalHeight) {
+      outW = banner.naturalWidth;
+      outH = banner.naturalHeight;
+    } else {
+      const sized = getReactionOutputSize(srcW, srcH);
+      outW = sized.w;
+      outH = sized.h;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    drawImageCover(ctx, img, outW, outH);
+    // Stamp the original PNG last so JPEG camera compression never touches the border.
+    stampBannerOnCanvas(ctx, outW, outH);
+    stampReactionHudOnCanvas(ctx, outW, outH, reaction);
+    return (await canvasToBlob(canvas, "image/png")) || dataUrlToBlob(canvas.toDataURL("image/png"));
+  }
+
+  async function downloadReactionWithBanner(reactionOrUrl, filename) {
+    const name = pngDownloadName(filename);
+    const blob = await renderReactionPngBlob(reactionOrUrl);
+    if (!blob) return;
+    await saveBlobToDevice(blob, name);
+  }
+
+  function pickRecorderMimeType() {
+    const types = [
+      "video/mp4",
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ];
+    if (typeof MediaRecorder === "undefined") return "";
+    return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
   }
 
   function reactionHasClip(reaction) {
@@ -3267,11 +3475,11 @@
   async function downloadReactionVideo(reaction, filename) {
     const frames = reaction?.frames?.length ? reaction.frames : null;
     if (!frames?.length) {
-      downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
+      await downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
       return;
     }
     if (typeof MediaRecorder === "undefined" || !HTMLCanvasElement.prototype.captureStream) {
-      downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
+      await downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
       return;
     }
 
@@ -3331,7 +3539,7 @@
     const outType = recorder.mimeType || mimeType || "video/webm";
     const ext = outType.includes("mp4") ? "mp4" : "webm";
     const base = String(filename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
-    downloadBlob(new Blob(chunks, { type: outType }), `${base}.${ext}`);
+    await saveBlobToDevice(new Blob(chunks, { type: outType }), `${base}.${ext}`);
   }
 
   function syncPreviewDownloadButtons() {
@@ -3430,15 +3638,10 @@
     openEndTurnGallery("bank");
   }
 
-  function downloadDataUrl(dataUrl, filename) {
-    if (requestHostDownload({ filename, dataUrl })) return;
-    const a = document.createElement("a");
-    a.href = dataUrl;
-    a.download = filename;
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  async function downloadDataUrl(dataUrl, filename) {
+    const blob = dataUrlToBlob(dataUrl);
+    if (!blob) return;
+    await saveBlobToDevice(blob, filename || "reaction.png");
   }
 
   function closeModal() {
@@ -3627,10 +3830,10 @@
               : ""
           }
           <div class="dl-actions">
-            <button type="button" class="dl-circle" data-dl="image" aria-label="Download image" title="Download image">${DL_IMAGE_ICON}</button>
+            <button type="button" class="dl-circle" data-dl="image" aria-label="Save image to camera roll" title="Save image">${DL_IMAGE_ICON}</button>
             ${
               showVideoDl
-                ? `<button type="button" class="dl-circle" data-dl="video" aria-label="Download video" title="Download video">${DL_VIDEO_ICON}</button>`
+                ? `<button type="button" class="dl-circle" data-dl="video" aria-label="Save video to camera roll" title="Save video">${DL_VIDEO_ICON}</button>`
                 : ""
             }
           </div>
@@ -3662,13 +3865,13 @@
           renderGalleryActions(player);
         });
       }
-      item.querySelector('[data-dl="image"]')?.addEventListener("click", (e) => {
+      item.querySelector('[data-dl="image"]')?.addEventListener("click", async (e) => {
         e.stopPropagation();
-        downloadReactionWithBanner(r, filename);
+        await downloadReactionWithBanner(r, filename);
       });
-      item.querySelector('[data-dl="video"]')?.addEventListener("click", (e) => {
+      item.querySelector('[data-dl="video"]')?.addEventListener("click", async (e) => {
         e.stopPropagation();
-        downloadReactionVideo(r, `${player.name}-reaction-${i + 1}.webm`);
+        await downloadReactionVideo(r, `${player.name}-reaction-${i + 1}.webm`);
       });
       modalBody.appendChild(item);
     });
@@ -3683,12 +3886,20 @@
     const dlAll = document.createElement("button");
     dlAll.type = "button";
     dlAll.className = "btn btn-download-all";
-    dlAll.textContent = "Download All";
+    dlAll.textContent = "Save All";
     dlAll.disabled = entries.length === 0;
-    dlAll.addEventListener("click", () => {
-      entries.forEach((r, i) => {
-        downloadReactionWithBanner(r, `${player.name}-reaction-${i + 1}.png`);
-      });
+    dlAll.addEventListener("click", async () => {
+      const files = [];
+      for (let i = 0; i < entries.length; i += 1) {
+        const blob = await renderReactionPngBlob(entries[i]);
+        if (blob) {
+          files.push({
+            blob,
+            filename: `${player.name}-reaction-${i + 1}.png`,
+          });
+        }
+      }
+      await saveFilesToDevice(files);
     });
 
     const confirm = document.createElement("button");
@@ -4125,20 +4336,29 @@
   previewModal.addEventListener("click", (e) => {
     if (e.target === previewModal) closeReactionPreview();
   });
-  previewDownloadImage?.addEventListener("click", (e) => {
+  previewDownloadImage?.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (!previewReaction && !previewDataUrl) return;
-    downloadReactionWithBanner(
+    await downloadReactionWithBanner(
       previewReaction || { dataUrl: previewDataUrl },
       previewFilename || "reaction.png"
     );
   });
-  previewDownloadVideo?.addEventListener("click", (e) => {
+  previewDownloadVideo?.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (!previewReaction) return;
     const base = String(previewFilename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
-    downloadReactionVideo(previewReaction, `${base}.webm`);
+    await downloadReactionVideo(previewReaction, `${base}.webm`);
   });
+  saveSheetConfirm?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    confirmSaveSheet();
+  });
+  saveSheetCancel?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeSaveSheet();
+  });
+  saveSheetBackdrop?.addEventListener("click", () => closeSaveSheet());
   previewSelectFrame?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!previewReaction?.frames?.length) return;
@@ -4421,11 +4641,15 @@
   }
   scheduleFitPlayArea();
   window.addEventListener("keydown", (e) => {
+    if (e.code === "Escape" && saveSheet && !saveSheet.hidden) {
+      closeSaveSheet();
+      return;
+    }
     if (e.code === "Escape" && !previewModal.hidden) {
       closeReactionPreview();
       return;
     }
-    if (!previewModal.hidden || !modalRoot.hidden) return;
+    if (!previewModal.hidden || !modalRoot.hidden || (saveSheet && !saveSheet.hidden)) return;
     if (isReactionsHorizontal()) {
       if (e.code === "ArrowLeft") {
         e.preventDefault();

@@ -2507,6 +2507,90 @@ body {
   height: 1.05rem;
 }
 
+/* —— Save to camera roll sheet —— */
+.save-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.save-sheet[hidden] {
+  display: none !important;
+}
+
+.save-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 4, 0, 0.78);
+}
+
+.save-sheet-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(420px, 100%);
+  max-height: min(90vh, 720px);
+  overflow: auto;
+  padding: 1rem 1rem 1.15rem;
+  border-radius: 14px;
+  border: 2px solid var(--gold);
+  background: linear-gradient(180deg, #3a2414, #1a1008);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  text-align: center;
+}
+
+.save-sheet-title {
+  margin: 0 0 0.35rem;
+  font-family: Bangers, cursive;
+  font-size: 1.55rem;
+  letter-spacing: 0.06em;
+  color: var(--gold-hot);
+}
+
+.save-sheet-hint {
+  margin: 0 0 0.85rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.save-sheet-preview {
+  margin: 0 auto 0.95rem;
+  max-width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #120a06;
+  border: 1px solid #6a4020;
+}
+
+.save-sheet-image,
+.save-sheet-video {
+  display: block;
+  width: 100%;
+  max-height: min(52vh, 420px);
+  object-fit: contain;
+  background: #120a06;
+}
+
+.save-sheet-image[hidden],
+.save-sheet-video[hidden] {
+  display: none !important;
+}
+
+.save-sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  justify-content: center;
+}
+
+.save-sheet-actions .btn {
+  min-width: 7.5rem;
+}
+
 /* —— Modals —— */
 .modal-root {
   position: fixed;
