@@ -1838,8 +1838,13 @@ body {
 }
 
 .reaction-hud-hits .lb-hits-icon {
+  display: inline-block;
   width: 0.95em;
   height: 0.95em;
+  flex-shrink: 0;
+  background-color: var(--gold);
+  -webkit-mask: url("assets/crosshair-hit.png") center / contain no-repeat;
+  mask: url("assets/crosshair-hit.png") center / contain no-repeat;
 }
 
 .reaction-card .reaction-hud-spin {
