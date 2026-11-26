@@ -54,6 +54,7 @@
   const reactionFlashImage = document.getElementById("reaction-flash-image");
   const turnHud = document.getElementById("turn-hud");
   const scoreEl = document.getElementById("score");
+  const scoreDialRow = document.getElementById("score-dial-row");
   const scoreLabel = document.getElementById("score-label");
   const reactionStrip = document.getElementById("reaction-strip");
   const reactionsStackWrap = document.querySelector(".reactions-stack-wrap");
@@ -386,8 +387,17 @@
     syncLobbyMusic();
   }
 
+  /** Always five dials: $00,000 … $99,999 */
+  const SCORE_DIAL_DIGITS = 5;
+
   function formatValue(n) {
     return `$${Number(n).toLocaleString()}`;
+  }
+
+  function formatDialDigits(n) {
+    const clamped = Math.max(0, Math.min(99999, Math.round(Number(n) || 0)));
+    const padded = String(clamped).padStart(SCORE_DIAL_DIGITS, "0");
+    return `${padded.slice(0, 2)},${padded.slice(2)}`;
   }
 
   function activeRunningTotal() {
@@ -396,10 +406,188 @@
     return p.banked + turnScore;
   }
 
+  /** Shown on dials / leaderboard while a cash-register count-up is running. */
+  let scoreDisplayOverride = null;
+  let scoreDialAnimating = false;
+
+  function digitStripHtml() {
+    let html = "";
+    for (let d = 0; d <= 9; d += 1) html += `<span>${d}</span>`;
+    return html;
+  }
+
+  function ensureScoreDialStructure() {
+    if (!scoreDialRow) return;
+    if (scoreDialRow.dataset.sig === "DD,DDD") return;
+    scoreDialRow.dataset.sig = "DD,DDD";
+    // Fixed five-digit register: 00,000
+    scoreDialRow.innerHTML = [
+      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
+      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
+      `<span class="score-dial-sep">,</span>`,
+      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
+      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
+      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
+    ].join("");
+  }
+
+  function paintScoreDials(value) {
+    if (!scoreEl || !scoreDialRow) return;
+    const n = Math.max(0, Math.min(99999, Math.round(Number(value) || 0)));
+    scoreEl.setAttribute("aria-label", formatValue(n));
+    ensureScoreDialStructure();
+    const formatted = formatDialDigits(n);
+    const dials = scoreDialRow.querySelectorAll(".score-dial-strip");
+    let digitIndex = 0;
+    for (const ch of formatted) {
+      if (ch < "0" || ch > "9") continue;
+      const strip = dials[digitIndex];
+      digitIndex += 1;
+      if (!strip) continue;
+      // % is relative to the strip height (10 equal digits) — stays locked on whole numbers
+      strip.style.transform = `translateY(${-Number(ch) * 10}%)`;
+    }
+  }
+
+  function playerDisplayTotal(p, index) {
+    if (
+      scoreDisplayOverride != null &&
+      index === currentPlayer &&
+      !p.done
+    ) {
+      return scoreDisplayOverride;
+    }
+    if (index === currentPlayer && !p.done) return p.banked + turnScore;
+    return p.banked;
+  }
+
   function setTurnScore(n) {
     turnScore = n;
-    scoreEl.textContent = formatValue(activeRunningTotal());
+    scoreDisplayOverride = null;
+    paintScoreDials(activeRunningTotal());
     if (gameStarted) renderLeaderboard();
+  }
+
+  function isScoreDialAnimating() {
+    return scoreDialAnimating;
+  }
+
+  function stopChaChing() {
+    try {
+      chaChingSfx.pause();
+      chaChingSfx.currentTime = 0;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function stopMoneyDrain() {
+    try {
+      moneyDrainSfx.pause();
+      moneyDrainSfx.currentTime = 0;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  /** Play a one-shot SFX (respects mute / effects-only; never gated as music). */
+  function playSfxDuration(audio, fallbackMs) {
+    if (!effectsAllowed()) return Promise.resolve(fallbackMs);
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      const playAttempt = audio.play();
+      if (playAttempt) playAttempt.catch(() => {});
+    } catch (_) {
+      /* ignore */
+    }
+    const dur = Number(audio.duration);
+    return Promise.resolve(Number.isFinite(dur) && dur > 0.2 ? dur * 1000 : fallbackMs);
+  }
+
+  function playChaChing() {
+    return playSfxDuration(chaChingSfx, 1280);
+  }
+
+  function playMoneyDrain() {
+    return playSfxDuration(moneyDrainSfx, 1240);
+  }
+
+  async function animateScoreDials(fromTotal, toTotal, durationMs) {
+    const start = performance.now();
+    let lastLbBucket = -1;
+    scoreDisplayOverride = fromTotal;
+    paintScoreDials(fromTotal);
+    renderLeaderboard();
+
+    await new Promise((resolve) => {
+      const tick = (now) => {
+        const t = Math.min(1, (now - start) / Math.max(16, durationMs));
+        // Ease out — big early spin, settles like a register
+        const eased = 1 - (1 - t) ** 2.4;
+        const value = Math.round(fromTotal + (toTotal - fromTotal) * eased);
+        scoreDisplayOverride = value;
+        paintScoreDials(value);
+        const bucket = Math.floor(t * 20);
+        if (bucket !== lastLbBucket) {
+          lastLbBucket = bucket;
+          renderLeaderboard();
+        }
+        if (t >= 1) {
+          resolve();
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+    scoreDisplayOverride = null;
+    paintScoreDials(toTotal);
+    renderLeaderboard();
+  }
+
+  /**
+   * Cash-register count-up on the HUD dials (+ leaderboard) while cha-ching plays.
+   * Call only after flash/zinger audio finishes.
+   */
+  async function creditPrizeAmount(amount) {
+    const add = Math.max(0, Math.round(Number(amount) || 0));
+    if (!add) return;
+
+    const fromTotal = activeRunningTotal();
+    turnScore += add;
+    const toTotal = activeRunningTotal();
+
+    scoreDialAnimating = true;
+    syncLobbyMusic();
+    const durationMs = await playChaChing();
+    await animateScoreDials(fromTotal, toTotal, durationMs);
+    stopChaChing();
+    scoreDialAnimating = false;
+    syncLobbyMusic();
+  }
+
+  /**
+   * During "Turkey Tom Got You!" — money drain SFX + dials roll to $00,000.
+   * Clears turn pot and banked cash (matches “lost all your cash”).
+   */
+  async function drainScoreToZero() {
+    const fromTotal = scoreDisplayOverride != null ? scoreDisplayOverride : activeRunningTotal();
+
+    scoreDialAnimating = true;
+    syncLobbyMusic();
+    const durationMs = await playMoneyDrain();
+    await animateScoreDials(fromTotal, 0, durationMs || 1240);
+
+    turnScore = 0;
+    if (players[currentPlayer]) players[currentPlayer].banked = 0;
+    scoreDisplayOverride = null;
+    paintScoreDials(0);
+    renderLeaderboard();
+    stopMoneyDrain();
+    scoreDialAnimating = false;
+    syncLobbyMusic();
   }
 
   function setLit(index) {
@@ -837,11 +1025,6 @@
     }
   }
 
-  function playerDisplayTotal(p, index) {
-    if (index === currentPlayer && !p.done) return p.banked + turnScore;
-    return p.banked;
-  }
-
   const leaderboardEmpty = document.getElementById("leaderboard-empty");
 
   function renderLeaderboard() {
@@ -903,6 +1086,18 @@
   lobbyMusic.preload = "auto";
   lobbyMusic.volume = 0.32;
 
+  // SFX (effects mode) — cash-register dial-up after prize flash
+  const chaChingSfx = new Audio("assets/cha_ching.wav");
+  chaChingSfx.preload = "auto";
+  chaChingSfx.volume = lobbyMusic.volume;
+  chaChingSfx.addEventListener("ended", () => syncLobbyMusic());
+
+  // SFX (effects mode) — dial drain during "Turkey Tom Got You!"
+  const moneyDrainSfx = new Audio("assets/money_drain.wav");
+  moneyDrainSfx.preload = "auto";
+  moneyDrainSfx.volume = lobbyMusic.volume;
+  moneyDrainSfx.addEventListener("ended", () => syncLobbyMusic());
+
   const cardFlipSfx = new Audio("assets/card-flip-whoosh.mp3");
   cardFlipSfx.preload = "auto";
   cardFlipSfx.volume = 0.75;
@@ -919,28 +1114,33 @@
   noWinnerComedy.volume = 0.38;
   noWinnerComedy.addEventListener("ended", () => syncLobbyMusic());
 
-  // Flash stings — remastered to lobby peak; play at lobby volume so they sit as loud as the theme.
+  // Flash stings — SFX (not music). Peak-matched; volumeScale is relative to lobby level.
   const PRIZE_FLASH_STINGS = [
-    "assets/yippee.wav",
-    "assets/okay_lets_go.wav",
-    "assets/yeehaw.wav",
-    "assets/oh_yeah.wav",
+    { src: "assets/yippee.wav", volumeScale: 1 },
+    { src: "assets/okay_lets_go.wav", volumeScale: 2 },
+    { src: "assets/yeehaw.wav", volumeScale: 1 },
+    { src: "assets/oh_yeah.wav", volumeScale: 1 },
   ];
-  const TURKEY_FLASH_STINGS = ["assets/bruh.wav", "assets/yikes.wav"];
+  const TURKEY_FLASH_STINGS = [
+    { src: "assets/bruh.wav", volumeScale: 1 },
+    { src: "assets/yikes.wav", volumeScale: 1 },
+  ];
   let prizeFlashStingIndex = 0;
   let turkeyFlashStingIndex = 0;
   /** @type {HTMLAudioElement|null} */
   let activeFlashSting = null;
 
-  PRIZE_FLASH_STINGS.concat(TURKEY_FLASH_STINGS).forEach((src) => {
+  PRIZE_FLASH_STINGS.concat(TURKEY_FLASH_STINGS).forEach(({ src }) => {
     const a = new Audio(src);
     a.preload = "auto";
   });
 
+  /** Only the looping lobby theme. Everything else is a sound effect. */
   function lobbyMusicAllowed() {
     return soundMode === "all";
   }
 
+  /** Cha-ching, money drain, flash VO, clips, ticks, fanfare, etc. */
   function effectsAllowed() {
     return soundMode !== "mute";
   }
@@ -956,23 +1156,25 @@
     activeFlashSting = null;
   }
 
-  function nextFlashStingSrc(kind) {
+  function nextFlashSting(kind) {
     if (kind === "turkey") {
-      const src = TURKEY_FLASH_STINGS[turkeyFlashStingIndex % TURKEY_FLASH_STINGS.length];
+      const sting = TURKEY_FLASH_STINGS[turkeyFlashStingIndex % TURKEY_FLASH_STINGS.length];
       turkeyFlashStingIndex = (turkeyFlashStingIndex + 1) % TURKEY_FLASH_STINGS.length;
-      return src;
+      return sting;
     }
-    const src = PRIZE_FLASH_STINGS[prizeFlashStingIndex % PRIZE_FLASH_STINGS.length];
+    const sting = PRIZE_FLASH_STINGS[prizeFlashStingIndex % PRIZE_FLASH_STINGS.length];
     prizeFlashStingIndex = (prizeFlashStingIndex + 1) % PRIZE_FLASH_STINGS.length;
-    return src;
+    return sting;
   }
 
-  /** Cycle prize/turkey flash VO — SFX, lobby-matched loudness. Resolves when the sting ends. */
+  /** Cycle prize/turkey flash VO — SFX. Resolves when the sting ends. */
   function playFlashSting(kind) {
     stopFlashSting();
     if (!effectsAllowed()) return Promise.resolve();
-    const audio = new Audio(nextFlashStingSrc(kind));
-    audio.volume = lobbyMusic.volume;
+    const sting = nextFlashSting(kind);
+    const audio = new Audio(sting.src);
+    const scale = typeof sting.volumeScale === "number" ? sting.volumeScale : 1;
+    audio.volume = Math.min(1, lobbyMusic.volume * scale);
     activeFlashSting = audio;
     return new Promise((resolve) => {
       const done = () => {
@@ -1134,6 +1336,8 @@
     if (!effectsAllowed()) {
       stopCardFlipSfx();
       stopFlashSting();
+      stopChaChing();
+      stopMoneyDrain();
       stopResultFanfare();
       silenceSpinTicks();
     }
@@ -1162,6 +1366,7 @@
       !spinning &&
       !isOverlayClipPlaying() &&
       !isReactionFlashPlaying() &&
+      !isScoreDialAnimating() &&
       !isCardFlipSfxPlaying() &&
       !isPodiumApplausePlaying() &&
       !isNoWinnerComedyPlaying();
@@ -1434,7 +1639,7 @@
     const reactionLabel = wasTurkey ? "Bust!" : `+${formatValue(awardedValue)}`;
 
     if (wasTurkey) {
-      setTurnScore(0);
+      // Keep dials on the current total until money_drain during the bust message
       turnOver = true;
       canAct = false;
       awaitingChoice = false;
@@ -1479,14 +1684,14 @@
     }
 
     scheduleFireHitAmount(formatValue(awardedValue));
-    setTurnScore(turnScore + awardedValue);
+    // Hold the running total until after zinger / reaction flash, then cha-ching dial-up
     hideBanner();
     playSting("win");
 
     canAct = false;
     awaitingChoice = false;
     updateActionButton();
-    finishPrizeAfterFire(firePromise, landed);
+    finishPrizeAfterFire(firePromise, landed, awardedValue);
   }
 
   async function decodeFlashImage() {
@@ -1731,7 +1936,7 @@
     }
   }
 
-  async function finishPrizeAfterFire(firePromise, landed) {
+  async function finishPrizeAfterFire(firePromise, landed, awardedValue) {
     await (firePromise || fireVideoPromise || Promise.resolve());
     if (turnOver) return;
     // Wait for the normal in-turn snap (taken during Fire!), then flip — no new capture later
@@ -1743,6 +1948,9 @@
     // Zinger; then cheer spike @ 0.5× only if mic had a real peak
     await flashReactionPhoto(latest, { rate: 0.5, trimToSpike: true, kind: "prize" });
     if (turnOver) return;
+    // Cash register dial-up after flash audio
+    await creditPrizeAmount(awardedValue);
+    if (turnOver) return;
     canAct = true;
     awaitingChoice = true;
     updateActionButton();
@@ -1750,9 +1958,10 @@
 
   async function finishTurnAfterTurkey(bustPromise) {
     await (bustPromise || playTurkeyAnimation());
-    // Bust clip done — show copy immediately, hold 3s (capture can finish in parallel)
+    // Bust clip done — show copy, drain dials with money_drain, hold message
     showTurkeyBustMessage();
     await Promise.all([
+      drainScoreToZero(),
       waitMs(TURKEY_MESSAGE_MS),
       reactionCapturePromise || Promise.resolve(),
     ]);
@@ -2633,7 +2842,7 @@
     const next = findNextPlayerIndex();
     if (next === -1) {
       canAct = false;
-      scoreEl.textContent = formatValue(0);
+      paintScoreDials(0);
       renderLeaderboard();
       updateActionButton();
       if (isMultiplayer()) {
@@ -3364,6 +3573,7 @@
   ensureActivePlayerSlot();
   syncSetupButtons();
   syncTurnHud();
+  paintScoreDials(0);
   renderLeaderboard();
   updateActionButton();
   startCamera();

@@ -160,7 +160,10 @@
         <span id="round-label" class="round-label" hidden>Round #1</span>
         <div class="scoreboard-line">
           <button type="button" class="score-label" id="score-label" title="Click to rename">Player 1</button>
-          <span id="score" class="score-value">$0</span>
+          <span id="score" class="score-value score-dials" aria-label="$0">
+            <span class="score-currency" aria-hidden="true">$</span>
+            <span id="score-dial-row" class="score-dial-row" aria-hidden="true"></span>
+          </span>
         </div>
       </div>
     </div>
