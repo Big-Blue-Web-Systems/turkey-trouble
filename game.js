@@ -40,6 +40,7 @@
   const fireVideo = document.getElementById("fire-video");
   const bustVideo = document.getElementById("bust-video");
   const fireHit = document.getElementById("fire-hit");
+  const turnHud = document.getElementById("turn-hud");
   const scoreEl = document.getElementById("score");
   const scoreLabel = document.getElementById("score-label");
   const reactionStrip = document.getElementById("reaction-strip");
@@ -53,6 +54,7 @@
   const playerNameInput = document.getElementById("player-name-input");
   const playerList = document.getElementById("player-list");
   const btnDonePlayers = document.getElementById("btn-done-players");
+  const btnStartFromSetup = document.getElementById("btn-start-from-setup");
   const soloWarning = document.getElementById("solo-warning");
   const leaderboard = document.getElementById("leaderboard");
   const leaderboardList = document.getElementById("leaderboard-list");
@@ -465,6 +467,11 @@
     const editorOpen = !playersEditor.hidden;
     btnDonePlayers.hidden = !(gameStarted && editorOpen);
     btnAddPlayers.hidden = editorOpen;
+    btnStartFromSetup.hidden = gameStarted || !editorOpen;
+  }
+
+  function syncTurnHud() {
+    turnHud.hidden = !gameStarted;
   }
 
   function playerDisplayTotal(p, index) {
@@ -856,13 +863,22 @@
   }
 
   function openReactionPreview(dataUrl, filename) {
-    // Available between turns / while idle — not mid-spin or during end-turn gallery
-    if (spinning || !modalRoot.hidden) return;
+    // Available anytime except mid-spin (stacks over end-turn gallery)
+    if (spinning) return;
     previewDataUrl = dataUrl;
     previewFilename = filename || "reaction.jpg";
     previewImage.src = dataUrl;
     previewModal.hidden = false;
   }
+
+  const DOWNLOAD_ICON_SVG = `
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"
+      />
+    </svg>
+  `;
 
   function closeReactionPreview() {
     previewModal.hidden = true;
@@ -935,24 +951,35 @@
 
     modalBody.innerHTML = "";
     player.reactions.forEach((r, i) => {
+      const filename = `${player.name}-reaction-${i + 1}.jpg`;
       const item = document.createElement("div");
       item.className = "gallery-item" + (multi && i === selectedFavoriteIndex ? " is-selected" : "");
       item.innerHTML = `
-        ${multi && i === selectedFavoriteIndex ? `<span class="fav-badge" aria-label="Favorite">★</span>` : ""}
-        <img src="${r.dataUrl}" alt="Reaction ${i + 1}" />
+        <div class="g-media">
+          ${
+            multi
+              ? `<button type="button" class="fav-pick${i === selectedFavoriteIndex ? " is-on" : ""}" aria-label="Pick as favorite">★</button>`
+              : ""
+          }
+          <img src="${r.dataUrl}" alt="Reaction ${i + 1}" />
+          <button type="button" class="dl-circle" aria-label="Download">${DOWNLOAD_ICON_SVG}</button>
+        </div>
         <div class="g-meta"><strong>${escapeHtml(r.label)}</strong>${r.bust ? "Bust" : "Hit"}</div>
-        <button type="button" class="btn-dl" aria-label="Download">⬇</button>
       `;
+      item.querySelector("img").addEventListener("click", () => {
+        openReactionPreview(r.dataUrl, filename);
+      });
       if (multi) {
-        item.querySelector("img").addEventListener("click", () => {
+        item.querySelector(".fav-pick").addEventListener("click", (e) => {
+          e.stopPropagation();
           selectedFavoriteIndex = i;
           renderGalleryBody(player);
           renderGalleryActions(player);
         });
       }
-      item.querySelector(".btn-dl").addEventListener("click", (e) => {
+      item.querySelector(".dl-circle").addEventListener("click", (e) => {
         e.stopPropagation();
-        downloadDataUrl(r.dataUrl, `${player.name}-reaction-${i + 1}.jpg`);
+        downloadDataUrl(r.dataUrl, filename);
       });
       modalBody.appendChild(item);
     });
@@ -1029,24 +1056,52 @@
     updateActionButton();
   }
 
+  function winnerPhotoFor(player, favMap) {
+    return player.favorite || favMap[player.name] || player.reactions.at(-1)?.dataUrl || null;
+  }
+
   function showWinner() {
     // Multiplayer only — solo ends on the results gallery
     const topScore = Math.max(...players.map((p) => p.banked));
     const winners = players.filter((p) => p.banked === topScore);
-    const winner = winners[0];
     const favMap = loadFavoritesMap();
-    const photo = winner.favorite || favMap[winner.name] || winner.reactions.at(-1)?.dataUrl || null;
 
     modalBody.classList.add("is-winner");
     modalActions.innerHTML = "";
-    modalTitle.textContent = winners.length > 1 ? "It's a tie!" : `${winner.name} wins!`;
-    modalSubtitle.textContent =
-      winners.length > 1
-        ? `${winners.map((w) => w.name).join(" & ")} — ${formatValue(topScore)}`
-        : formatValue(topScore);
-    modalBody.innerHTML = photo
-      ? `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(winner.name)}" />`
-      : `<p class="modal-subtitle">No favorite photo saved.</p>`;
+
+    if (topScore <= 0) {
+      modalTitle.textContent = "Turkey Tom Wins";
+      modalSubtitle.textContent = "Nobody bagged any cash";
+      modalBody.innerHTML = `
+        <img class="winner-photo winner-photo-tom" src="assets/turkey-tile.png" alt="Turkey Tom" />
+      `;
+    } else if (winners.length > 1) {
+      modalTitle.textContent = "It's a tie!";
+      modalSubtitle.textContent = `${winners.map((w) => w.name).join(" & ")} — ${formatValue(topScore)}`;
+      const photos = winners
+        .map((w) => {
+          const photo = winnerPhotoFor(w, favMap);
+          if (!photo) {
+            return `<div class="winner-tie-slot"><p class="modal-subtitle">${escapeHtml(w.name)}</p></div>`;
+          }
+          return `
+            <figure class="winner-tie-slot">
+              <img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(w.name)}" />
+              <figcaption class="winner-caption">${escapeHtml(w.name)}</figcaption>
+            </figure>
+          `;
+        })
+        .join("");
+      modalBody.innerHTML = `<div class="winner-photos">${photos}</div>`;
+    } else {
+      const winner = winners[0];
+      const photo = winnerPhotoFor(winner, favMap);
+      modalTitle.textContent = `${winner.name} wins!`;
+      modalSubtitle.textContent = formatValue(topScore);
+      modalBody.innerHTML = photo
+        ? `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(winner.name)}" />`
+        : `<p class="modal-subtitle">No favorite photo saved.</p>`;
+    }
 
     const again = document.createElement("button");
     again.type = "button";
@@ -1079,6 +1134,7 @@
     renderPlayerList();
     renderLeaderboard();
     syncSetupButtons();
+    syncTurnHud();
     updateActionButton();
   }
 
@@ -1148,6 +1204,7 @@
     clearReactionStrip();
     buildBoard();
     setTurnScore(0);
+    syncTurnHud();
     updateActionButton();
   }
 
@@ -1161,6 +1218,13 @@
     startSpin();
   }
 
+  function startGameFromSetup() {
+    if (gameStarted) return;
+    soloStartArmed = false;
+    setSoloWarning(false);
+    beginGame();
+  }
+
   function onActionClick() {
     if (!gameStarted) {
       tryBeginFromStartButton();
@@ -1171,6 +1235,7 @@
   }
 
   btnAddPlayers.addEventListener("click", openPlayersEditor);
+  btnStartFromSetup.addEventListener("click", startGameFromSetup);
 
   addPlayerForm.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -1227,6 +1292,7 @@
   buildBoard();
   buildBoardLights();
   syncSetupButtons();
+  syncTurnHud();
   updateActionButton();
   startCamera();
 

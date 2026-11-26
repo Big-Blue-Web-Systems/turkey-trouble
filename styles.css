@@ -89,30 +89,46 @@ body {
   font-size: 0.85rem;
 }
 
+.turn-hud {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin: 0.15rem 0 0.55rem;
+}
+
+.turn-hud[hidden] {
+  display: none !important;
+}
+
 .scoreboard {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.65rem;
   background: linear-gradient(180deg, #4a2c16, #2a160c);
   border: 2px solid var(--gold);
-  border-radius: 10px;
-  padding: 0.45rem 0.9rem;
-  min-width: 7.5rem;
-  text-align: right;
+  border-radius: 12px;
+  padding: 0.45rem 1.15rem 0.55rem;
+  text-align: center;
   box-shadow: 0 0 20px rgba(240, 180, 41, 0.15);
 }
 
-.score-label {
-  display: block;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--muted);
-}
-
+.score-label,
 .score-value {
   font-family: Bangers, cursive;
-  font-size: 2rem;
+  font-size: clamp(1.7rem, 4.5vw, 2.45rem);
+  font-weight: 700;
   letter-spacing: 0.09em;
   color: var(--gold-hot);
   line-height: 1;
+}
+
+.score-label {
+  max-width: min(46vw, 14rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .setup-panel {
@@ -133,10 +149,6 @@ body {
   gap: 0.55rem;
   align-items: center;
   width: 100%;
-}
-
-.setup-actions .scoreboard {
-  margin-left: auto;
 }
 
 .players-editor {
@@ -781,6 +793,19 @@ body {
   box-shadow: 0 4px 0 #9a6b00;
 }
 
+.btn-start-from-setup {
+  display: block;
+  width: 100%;
+  margin-top: 0.35rem;
+  background: linear-gradient(180deg, #ffe066, var(--gold));
+  color: #2a1a00;
+  box-shadow: 0 5px 0 #9a6b00;
+}
+
+.btn-start-from-setup[hidden] {
+  display: none !important;
+}
+
 .btn-action.is-start,
 .btn-action.is-keep {
   background: linear-gradient(180deg, #ffe066, var(--gold));
@@ -908,8 +933,8 @@ body {
 /* Prize amount pops in the feather burst during Fire! clip */
 .fire-hit {
   position: absolute;
-  left: 66%;
-  top: 38%;
+  left: 80%;
+  top: 30%;
   z-index: 9;
   transform: translate(-50%, -50%);
   font-family: Bangers, cursive;
@@ -974,7 +999,6 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.75rem;
   max-width: min(520px, 100%);
 }
 
@@ -982,7 +1006,7 @@ body {
   position: absolute;
   top: -0.35rem;
   right: -0.35rem;
-  z-index: 2;
+  z-index: 3;
   width: 2.2rem;
   height: 2.2rem;
   border: 2px solid var(--gold);
@@ -1003,6 +1027,13 @@ body {
   filter: brightness(1.1);
 }
 
+.preview-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+}
+
 .preview-image {
   display: block;
   width: min(480px, 88vw);
@@ -1014,11 +1045,51 @@ body {
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
 }
 
-.btn-preview-download {
-  background: linear-gradient(180deg, #4a628a, #314560);
-  color: var(--text);
-  box-shadow: 0 5px 0 #1a2436;
-  min-width: 9rem;
+.dl-circle {
+  position: absolute;
+  right: 0.7rem;
+  bottom: 0.7rem;
+  z-index: 2;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(12, 8, 4, 0.45);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.dl-circle:hover {
+  background: rgba(12, 8, 4, 0.62);
+  transform: scale(1.05);
+}
+
+.dl-circle:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.dl-circle svg {
+  display: block;
+}
+
+.gallery-item .dl-circle {
+  right: 0.45rem;
+  bottom: 0.45rem;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.gallery-item .dl-circle svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* —— Modals —— */
@@ -1107,23 +1178,37 @@ body {
   box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.35);
 }
 
-.gallery-item .fav-badge {
+.gallery-item .g-media {
+  position: relative;
+  line-height: 0;
+}
+
+.gallery-item .fav-pick {
   position: absolute;
   top: 0.35rem;
   left: 0.35rem;
   z-index: 2;
-  width: 1.6rem;
-  height: 1.6rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(12, 8, 4, 0.45);
+  color: #fff8dc;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.gallery-item.is-selected .fav-pick,
+.gallery-item .fav-pick.is-on {
   background: var(--gold);
   color: #2a1a00;
-  font-size: 1rem;
-  line-height: 1;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
 }
 
 .gallery-item img {
@@ -1131,11 +1216,11 @@ body {
   aspect-ratio: 1;
   object-fit: cover;
   display: block;
-  cursor: pointer;
+  cursor: zoom-in;
 }
 
 .gallery-item .g-meta {
-  padding: 0.35rem;
+  padding: 0.45rem 0.35rem;
   text-align: center;
   font-size: 0.72rem;
   color: var(--muted);
@@ -1147,27 +1232,51 @@ body {
   font-size: 0.85rem;
 }
 
-.gallery-item .btn-dl {
-  margin: 0 auto 0.45rem;
-  width: 2.4rem;
-  height: 2.4rem;
-  font-size: 1.15rem;
-  line-height: 1;
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  background: linear-gradient(180deg, #4a628a, #314560);
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .winner-photo {
   width: min(100%, 360px);
   border-radius: 12px;
   border: 3px solid var(--gold);
   display: block;
+  background: #1a0c08;
+}
+
+.winner-photo-tom {
+  width: min(100%, 420px);
+  max-height: min(58vh, 480px);
+  object-fit: contain;
+  border-color: var(--turkey-glow);
+  background: linear-gradient(160deg, #5a1818, #2a0a0a);
+  padding: 0.75rem;
+}
+
+.winner-photos {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.85rem;
+  width: 100%;
+}
+
+.winner-tie-slot {
+  margin: 0;
+  flex: 1 1 160px;
+  max-width: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.winner-tie-slot .winner-photo {
+  width: 100%;
+}
+
+.winner-caption {
+  font-family: Bangers, cursive;
+  font-size: 1.15rem;
+  letter-spacing: 0.09em;
+  color: var(--gold-hot);
+  text-align: center;
 }
 
 .modal-actions {

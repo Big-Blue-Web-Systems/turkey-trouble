@@ -30,10 +30,6 @@
       <div class="setup-actions">
         <button id="btn-add-players" class="btn btn-players" type="button">Add Players</button>
         <button id="btn-done-players" class="btn btn-start-game" type="button" hidden>Done</button>
-        <div class="scoreboard">
-          <span class="score-label" id="score-label">Turn</span>
-          <span id="score" class="score-value">0</span>
-        </div>
       </div>
       <div id="players-editor" class="players-editor" hidden>
         <form id="add-player-form" class="add-player-form">
@@ -42,8 +38,16 @@
         </form>
         <p class="drag-hint">Drag to set turn order</p>
         <ul id="player-list" class="player-list" aria-label="Player order"></ul>
+        <button id="btn-start-from-setup" class="btn btn-start-from-setup" type="button">Start Game</button>
       </div>
     </section>
+
+    <div id="turn-hud" class="turn-hud" hidden>
+      <div class="scoreboard" aria-live="polite">
+        <span class="score-label" id="score-label">Turn</span>
+        <span id="score" class="score-value">$0</span>
+      </div>
+    </div>
 
     <div class="board-frame">
       <div id="board-lights" class="board-lights" aria-hidden="true"></div>
@@ -113,10 +117,17 @@
     <div class="preview-backdrop" id="preview-backdrop"></div>
     <div class="preview-dialog" role="dialog" aria-modal="true" aria-label="Reaction preview">
       <button id="preview-close" class="preview-close" type="button" aria-label="Close preview">×</button>
-      <img id="preview-image" class="preview-image" alt="Reaction preview" />
-      <button id="preview-download" class="btn btn-preview-download" type="button" aria-label="Download reaction">
-        ⬇ Download
-      </button>
+      <div class="preview-frame">
+        <img id="preview-image" class="preview-image" alt="Reaction preview" />
+        <button id="preview-download" class="dl-circle" type="button" aria-label="Download reaction">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+            <path
+              fill="currentColor"
+              d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"
+            />
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 
