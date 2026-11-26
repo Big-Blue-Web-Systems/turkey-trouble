@@ -2192,8 +2192,11 @@ body {
   display: block;
 }
 
+/* Keep the live camera decoding under the blast overlay.
+   visibility:hidden stopped iOS from yielding canvas frames → still-only clips / no 0.5× flash. */
 .camera-well.is-blasting #camera {
-  visibility: hidden;
+  /* covered by .turkey-blast (z-index 8, opaque) — do not pause decode */
+  visibility: visible;
 }
 
 /* Keep turkey result copy visible over the bust clip */

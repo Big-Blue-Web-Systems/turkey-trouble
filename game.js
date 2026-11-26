@@ -2198,7 +2198,8 @@
       const { sampleRate, duration } = buffer;
       if (!channel.length || duration <= 0) return null;
 
-      const windowSec = 1 / REACTION_CLIP_FPS;
+      const clipFps = reactionClipFps();
+      const windowSec = 1 / clipFps;
       const windowSamples = Math.max(1, Math.floor(sampleRate * windowSec));
       const energies = [];
       for (let i = 0; i < channel.length; i += windowSamples) {
@@ -2243,9 +2244,9 @@
         endSec = duration;
       }
 
-      let startFrame = Math.max(0, Math.floor(startSec * REACTION_CLIP_FPS));
-      let endFrame = Math.min(frameCount, Math.ceil(endSec * REACTION_CLIP_FPS));
-      const minFrames = Math.min(frameCount, Math.ceil(FLASH_SPIKE_MIN_SEC * REACTION_CLIP_FPS));
+      let startFrame = Math.max(0, Math.floor(startSec * clipFps));
+      let endFrame = Math.min(frameCount, Math.ceil(endSec * clipFps));
+      const minFrames = Math.min(frameCount, Math.ceil(FLASH_SPIKE_MIN_SEC * clipFps));
       if (endFrame - startFrame < minFrames) {
         endFrame = Math.min(frameCount, startFrame + minFrames);
         if (endFrame - startFrame < minFrames) {
@@ -2268,11 +2269,13 @@
    */
   async function playFlashClipAtRate(frames, reaction, rate, opts = {}) {
     const playbackRate = rate > 0 ? rate : 1;
-    const frameInterval = Math.max(16, Math.round(1000 / REACTION_CLIP_FPS / playbackRate));
+    const fps = reactionClipFps();
+    const frameInterval = Math.max(16, Math.round(1000 / fps / playbackRate));
     const trim = opts.trimToSpike ? reaction?.flashTrim : null;
     const startFrame = trim ? trim.startFrame : 0;
     const endFrame = trim ? trim.endFrame : frames.length;
     const startSec = trim ? trim.startSec : 0;
+    const decodeEach = isLikelyMobileDevice();
     let flashAudio = null;
     let flashGraph = null;
 
@@ -2322,10 +2325,10 @@
     }
 
     try {
-      reactionFlashImage.src = frames[startFrame] || frames[0];
-      await decodeFlashImage();
       for (let i = startFrame; i < endFrame; i += 1) {
-        reactionFlashImage.src = frames[i];
+        reactionFlashImage.src = frames[i] || frames[0];
+        // Mobile Safari often skips paints if we don't await decode between data-URLs
+        if (decodeEach || i === startFrame) await decodeFlashImage();
         await waitMs(frameInterval);
       }
     } finally {
@@ -2356,23 +2359,25 @@
 
     const frames = reaction?.frames;
     const hasClipFrames = Array.isArray(frames) && frames.length > 1;
+    const clipFps = reactionClipFps();
     // Prefer mic-spike trim; if analysis missed (common on quiet mobile mics), still slow-mo a mid window
     if (trimToSpike && hasClipFrames && reaction && !reaction.flashTrim) {
       const span = Math.min(
         frames.length,
-        Math.max(3, Math.ceil(FLASH_SPIKE_MIN_SEC * REACTION_CLIP_FPS))
+        Math.max(3, Math.ceil(FLASH_SPIKE_MIN_SEC * clipFps))
       );
       const startFrame = Math.max(0, Math.floor((frames.length - span) / 2));
       const endFrame = Math.min(frames.length, startFrame + span);
       reaction.flashTrim = {
-        startSec: startFrame / REACTION_CLIP_FPS,
-        endSec: endFrame / REACTION_CLIP_FPS,
+        startSec: startFrame / clipFps,
+        endSec: endFrame / clipFps,
         startFrame,
         endFrame,
         peakIdx: startFrame,
       };
     }
-    const playClip = isReactionVideoMode() && hasClipFrames;
+    // Play from captured frames even if mode flipped; video-mode gate was skipping valid clips
+    const playClip = hasClipFrames && (isReactionVideoMode() || reaction?.isClip);
 
     // Cover the live camera with the stored snapshot, then enlarge that composite
     reactionFlash.hidden = false;
@@ -2762,7 +2767,8 @@
   function getReactionCaptureSize(srcW, srcH) {
     let w = Math.max(1, Math.round(srcW || 640));
     let h = Math.max(1, Math.round(srcH || 480));
-    const maxEdge = isLikelyMobileDevice() ? 640 : 960;
+    // BBV mobile (blob iframe + Safari) needs tiny frames to keep 10fps viable
+    const maxEdge = isLikelyMobileDevice() ? 480 : 960;
     const edge = Math.max(w, h);
     if (edge > maxEdge) {
       const scale = maxEdge / edge;
@@ -2772,8 +2778,24 @@
     return { w, h };
   }
 
+  function reactionClipFps() {
+    return isLikelyMobileDevice() ? 6 : REACTION_CLIP_FPS;
+  }
+
+  async function waitForCameraFrame(timeoutMs = 2000) {
+    const start = performance.now();
+    while (performance.now() - start < timeoutMs) {
+      if (camera?.srcObject && camera.videoWidth > 0 && camera.readyState >= 2) {
+        return true;
+      }
+      await waitMs(50);
+    }
+    return !!(camera?.srcObject && camera.videoWidth > 0);
+  }
+
   function grabReactionFrameDataUrl() {
     if (!camera.srcObject) return null;
+    if (!camera.videoWidth || !camera.videoHeight) return null;
     try {
       const crop = getReactionCoverCrop();
       const out = getReactionCaptureSize(crop.w, crop.h);
@@ -2782,7 +2804,7 @@
       const ctx = captureCanvas.getContext("2d");
       // Camera only — border is overlaid in CSS for display and stamped fresh on download.
       drawReactionCamera(ctx, out.w, out.h, crop);
-      const quality = isLikelyMobileDevice() ? 0.72 : 0.92;
+      const quality = isLikelyMobileDevice() ? 0.62 : 0.92;
       return captureCanvas.toDataURL("image/jpeg", quality);
     } catch (err) {
       console.error(err);
@@ -3130,8 +3152,10 @@
 
   async function captureReactionClip({ bust, label, name, score, hits, untilPromise }) {
     if (!camera.srcObject) return;
+    await waitForCameraFrame();
     const frames = [];
-    const interval = Math.round(1000 / REACTION_CLIP_FPS);
+    const fps = reactionClipFps();
+    const interval = Math.round(1000 / fps);
     const started = performance.now();
     let stop = false;
     const markStop = () => {
@@ -3144,8 +3168,8 @@
     }
 
     // Keep grabbing briefly after overlay ends so a slow first frame doesn't yield a "still"
-    const minFrames = Math.max(3, Math.ceil((REACTION_CLIP_MS / 1000) * REACTION_CLIP_FPS * 0.45));
-    const minMs = Math.round(REACTION_CLIP_MS * 0.55);
+    const minFrames = Math.max(4, Math.ceil((REACTION_CLIP_MS / 1000) * fps * 0.5));
+    const minMs = Math.round(REACTION_CLIP_MS * 0.6);
 
     const micRec = startReactionMicRecorder();
     let audioBlob = null;
@@ -3165,7 +3189,7 @@
       if (micRec) audioBlob = await micRec.stop();
     }
 
-    if (!frames.length) return;
+    if (frames.length < 2) return;
 
     const flashTrim = audioBlob
       ? await analyzeReactionAudioSpike(audioBlob, frames.length)
