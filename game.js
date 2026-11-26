@@ -3361,12 +3361,29 @@
   function requestHostDownload(payload) {
     try {
       if (!isEmbeddedFrame()) return false;
-      window.parent.postMessage(
-        { source: "turkey-trouble", type: "download", ...payload },
-        "*",
-        payload.buffer ? [payload.buffer] : []
-      );
-      return true;
+      const buffer = payload.buffer;
+      try {
+        window.parent.postMessage(
+          { source: "turkey-trouble", type: "download", ...payload },
+          "*",
+          buffer ? [buffer] : []
+        );
+        return true;
+      } catch (_) {
+        // Transferable postMessage can throw on large mobile payloads — clone instead
+        if (!buffer || typeof buffer.slice !== "function") return false;
+        window.parent.postMessage(
+          {
+            source: "turkey-trouble",
+            type: "download",
+            filename: payload.filename,
+            mime: payload.mime,
+            buffer: buffer.slice(0),
+          },
+          "*"
+        );
+        return true;
+      }
     } catch (_) {
       return false;
     }
@@ -3436,38 +3453,56 @@
     } catch (_) {
       return false;
     }
+    const started = performance.now();
     try {
+      // share() must be invoked synchronously in the tap turn — callers must not
+      // await anything before reaching here on mobile.
       await navigator.share(data);
       return true;
     } catch (err) {
-      // Real user cancel. In iframes (BBV) WebKit sometimes AbortErrors without a
-      // sheet after a lost tap gesture — return false so host download can run.
-      if (err && err.name === "AbortError") return !isEmbeddedFrame();
+      if (err && err.name === "AbortError") {
+        // Instant abort in an iframe = lost gesture (no sheet). Slower = user dismissed.
+        if (isEmbeddedFrame() && performance.now() - started < 280) return false;
+        return true;
+      }
       return false;
     }
   }
 
-  /** Shrink big PNGs before postMessage — large transfers flake out in mobile iframes. */
+  /**
+   * Compact images before postMessage — mobile iframe transfers flake on big PNGs.
+   * Always JPEG on mobile; on desktop only recompress when oversized.
+   */
   async function blobForHostTransfer(blob, filename) {
     const name = String(filename || "reaction.bin");
     if (!blob) return { blob, filename: name };
     const mime = blob.type || mimeFromFilename(name);
     if (!/^image\//.test(mime)) return { blob, filename: name };
-    // Small enough — keep as-is (preserves PNG border crispness)
-    if (blob.size < 1_250_000) return { blob, filename: name };
+    const mobile = isLikelyMobileDevice();
+    if (!mobile && blob.size < 1_250_000) return { blob, filename: name };
     try {
       const bitmap = await createImageBitmap(blob);
+      let w = bitmap.width;
+      let h = bitmap.height;
+      const maxEdge = mobile ? 1280 : 2048;
+      const edge = Math.max(w, h);
+      if (edge > maxEdge) {
+        const scale = maxEdge / edge;
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+      }
       const canvas = document.createElement("canvas");
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
+      canvas.width = w;
+      canvas.height = h;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(bitmap, 0, 0);
+      ctx.drawImage(bitmap, 0, 0, w, h);
       if (typeof bitmap.close === "function") bitmap.close();
-      const jpeg = await canvasToBlob(canvas, "image/jpeg", 0.92);
-      if (jpeg && jpeg.size && jpeg.size < blob.size) {
+      const quality = mobile ? 0.88 : 0.92;
+      const jpeg = await canvasToBlob(canvas, "image/jpeg", quality);
+      if (jpeg && jpeg.size && (mobile || jpeg.size < blob.size)) {
         return {
           blob: jpeg,
-          filename: name.replace(/\.png$/i, ".jpg"),
+          filename: name.replace(/\.(png|webp)$/i, ".jpg"),
         };
       }
     } catch (_) {
@@ -3585,9 +3620,8 @@
   }
 
   /**
-   * Mobile standalone → share sheet.
-   * Mobile BBV iframe → host download first (share is flaky after async image render).
-   * Desktop → Finder/Explorer (single file) or folder picker (batch). Never Share.
+   * Mobile → share sheet first (camera roll) while the tap gesture is still valid,
+   * then host/anchor fallback. Desktop → Finder/Explorer; never Share.
    * @param {{ blob: Blob, filename: string }[]} entries
    */
   async function saveFilesToDevice(entries) {
@@ -3600,14 +3634,9 @@
     if (!list.length) return;
 
     if (isLikelyMobileDevice()) {
-      // Embedded shells: host is reliable; share often AbortErrors once the tap gesture is gone
-      if (isEmbeddedFrame()) {
-        if (await tryHostDownloadEntries(list)) return;
-        if (await tryShareFiles(list)) return;
-      } else {
-        if (await tryShareFiles(list)) return;
-        if (await tryHostDownloadEntries(list)) return;
-      }
+      // Share first — host <a download> is a silent no-op for images on iOS.
+      if (await tryShareFiles(list)) return;
+      if (await tryHostDownloadEntries(list)) return;
       list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
       return;
     }
@@ -3616,6 +3645,19 @@
     if (list.length === 1 && (await trySaveFilePicker(list))) return;
     if (await tryHostDownloadEntries(list)) return;
     list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
+  }
+
+  /** Mobile save with no awaits before share — keeps the tap gesture alive. */
+  async function saveBlobToDeviceFromGesture(blob, filename) {
+    if (!blob) return;
+    const entry = { blob, filename: uniqueDownloadName(filename) };
+    if (isLikelyMobileDevice()) {
+      if (await tryShareFiles([entry])) return;
+      if (await tryHostDownloadEntries([entry])) return;
+      triggerAnchorDownload(entry.blob, entry.filename);
+      return;
+    }
+    await saveFilesToDevice([entry]);
   }
 
   async function saveBlobToDevice(blob, filename) {
@@ -3662,7 +3704,18 @@
     // Stamp the original PNG last so JPEG camera compression never touches the border.
     stampBannerOnCanvas(ctx, outW, outH);
     stampReactionHudOnCanvas(ctx, outW, outH, reaction);
+    // Mobile: JPEG warms/saves much faster and survives BBV postMessage; border is already stamped.
+    if (isLikelyMobileDevice()) {
+      const jpeg = await canvasToBlob(canvas, "image/jpeg", 0.9);
+      if (jpeg) return jpeg;
+    }
     return (await canvasToBlob(canvas, "image/png")) || dataUrlToBlob(canvas.toDataURL("image/png"));
+  }
+
+  function filenameForImageBlob(filename, blob) {
+    const base = pngDownloadName(filename);
+    if (blob?.type === "image/jpeg") return base.replace(/\.png$/i, ".jpg");
+    return base;
   }
 
   function warmReactionPngExport(reaction) {
@@ -3724,15 +3777,34 @@
   }
 
   async function downloadReactionWithBanner(reactionOrUrl, filename) {
+    const reaction =
+      reactionOrUrl && typeof reactionOrUrl === "object" ? reactionOrUrl : null;
+
+    // Mobile: never await before share. Warm blob → share in this tap turn.
+    // A prior await (even reserveDesktopSave→null) drops the iOS user gesture.
+    if (isLikelyMobileDevice()) {
+      const warmBlob = reaction?._exportPngBlob || null;
+      if (warmBlob) {
+        await saveBlobToDeviceFromGesture(
+          warmBlob,
+          filenameForImageBlob(filename, warmBlob)
+        );
+        return;
+      }
+      if (reaction) warmReactionPngExport(reaction);
+      const blob = await getReactionPngExport(reactionOrUrl);
+      if (!blob) return;
+      // Gesture is gone after render — host/anchor fallback only
+      await saveBlobToDevice(blob, filenameForImageBlob(filename, blob));
+      return;
+    }
+
     const name = pngDownloadName(filename);
     // Desktop: open Finder/Explorer on the click, before async render loses the gesture
     const desktop = await reserveDesktopSave(name);
     if (desktop?.cancelled) return;
 
-    // Keep warm moving so a second tap (or this await) is more likely to hit cache
-    if (reactionOrUrl && typeof reactionOrUrl === "object") {
-      warmReactionPngExport(reactionOrUrl);
-    }
+    if (reaction) warmReactionPngExport(reaction);
 
     const blob = await getReactionPngExport(reactionOrUrl);
     if (!blob) return;
@@ -3741,7 +3813,7 @@
       await writeBlobToFileHandle(desktop.handle, blob);
       return;
     }
-    await saveBlobToDevice(blob, desktop?.filename || name);
+    await saveBlobToDevice(blob, desktop?.filename || filenameForImageBlob(name, blob));
   }
 
   function pickRecorderMimeType(withAudio = false) {
@@ -3972,6 +4044,24 @@
     const base = String(filename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
     const mimeGuess = pickRecorderMimeType(true);
     const extGuess = mimeGuess.includes("mp4") ? "mp4" : "webm";
+
+    // Mobile: share warm video in this tap turn (no prior await)
+    if (isLikelyMobileDevice()) {
+      const warmBlob = reaction?._exportVideoBlob || null;
+      const warmExt = reaction?._exportVideoExt || extGuess;
+      if (warmBlob) {
+        await saveBlobToDeviceFromGesture(warmBlob, `${base}.${warmExt}`);
+        return;
+      }
+      const built = await getReactionVideoExport(reaction);
+      if (!built?.blob) {
+        await downloadReactionWithBanner(reaction, `${base}.png`);
+        return;
+      }
+      await saveBlobToDevice(built.blob, `${base}.${built.ext || extGuess}`);
+      return;
+    }
+
     // Desktop: pick save location immediately so encode doesn't fall back to auto-download
     const desktop = await reserveDesktopSave(`${base}.${extGuess}`);
     if (desktop?.cancelled) return;
@@ -3996,6 +4086,17 @@
 
   function syncPreviewDownloadButtons() {
     if (previewDownloadVideo) previewDownloadVideo.hidden = !showVideoDownloadControls();
+  }
+
+  /** Swallow the opening tap so it can't also hit the preview download controls. */
+  function armPreviewDownloadGate() {
+    const actions = document.getElementById("preview-download-actions");
+    if (!actions) return;
+    actions.style.pointerEvents = "none";
+    clearTimeout(armPreviewDownloadGate._timer);
+    armPreviewDownloadGate._timer = setTimeout(() => {
+      actions.style.pointerEvents = "";
+    }, 450);
   }
 
   const DL_IMAGE_ICON = `<span class="dl-icon dl-icon-image" aria-hidden="true"></span>`;
@@ -4049,6 +4150,7 @@
       });
     }
 
+    armPreviewDownloadGate();
     previewModal.hidden = false;
   }
 
@@ -4349,7 +4451,10 @@
         if (blob) {
           files.push({
             blob,
-            filename: `${player.name}-reaction-${i + 1}.png`,
+            filename: filenameForImageBlob(
+              `${player.name}-reaction-${i + 1}.png`,
+              blob
+            ),
           });
         }
       }
