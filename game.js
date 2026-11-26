@@ -2280,21 +2280,38 @@
     if (effectsAllowed() && reaction?.audioUrl) {
       try {
         ensureAudio();
+        if (audioCtx?.state === "suspended") {
+          try {
+            await audioCtx.resume();
+          } catch (_) {
+            /* continue with element volume */
+          }
+        }
         flashAudio = new Audio(reaction.audioUrl);
+        flashAudio.playsInline = true;
         flashAudio.playbackRate = playbackRate;
         // Let pitch ride with rate — slow-mo deep / 2× chipmunk
         if ("preservesPitch" in flashAudio) flashAudio.preservesPitch = false;
         if ("mozPreservesPitch" in flashAudio) flashAudio.mozPreservesPitch = false;
         if ("webkitPreservesPitch" in flashAudio) flashAudio.webkitPreservesPitch = false;
         flashAudio.volume = 1;
-        flashAudio.currentTime = Math.max(0, startSec);
-        // Route through GainNode so we can go past HTMLAudio's 1.0 ceiling
-        const source = audioCtx.createMediaElementSource(flashAudio);
-        const gain = audioCtx.createGain();
-        gain.gain.value = FLASH_AUDIO_GAIN;
-        source.connect(gain);
-        gain.connect(audioCtx.destination);
-        flashGraph = { source, gain };
+        try {
+          flashAudio.currentTime = Math.max(0, startSec);
+        } catch (_) {
+          /* iOS may reject seek before metadata */
+        }
+        // Prefer GainNode boost; fall back to plain element play on mobile WebAudio quirks
+        try {
+          const source = audioCtx.createMediaElementSource(flashAudio);
+          const gain = audioCtx.createGain();
+          gain.gain.value = FLASH_AUDIO_GAIN;
+          source.connect(gain);
+          gain.connect(audioCtx.destination);
+          flashGraph = { source, gain };
+        } catch (_) {
+          flashGraph = null;
+          flashAudio.volume = Math.min(1, FLASH_AUDIO_GAIN);
+        }
         const playAttempt = flashAudio.play();
         if (playAttempt) playAttempt.catch(() => {});
       } catch (_) {
@@ -2396,6 +2413,8 @@
     }
     // Zinger; then cheer spike @ 0.5× only if mic had a real peak
     await flashReactionPhoto(latest, { rate: 0.5, trimToSpike: true, kind: "prize" });
+    // Safe to encode download video now that the flash has finished
+    deferWarmReactionVideoExport(latest);
     if (turnOver) return;
     // Cash register dial-up after flash audio
     await creditPrizeAmount(awardedValue);
@@ -2417,6 +2436,7 @@
     const latest = players[currentPlayer]?.reactions?.at(-1) || null;
     // Zinger; then full bust clip @ 2× only if mic had a real peak
     await flashReactionPhoto(latest, { rate: 2, kind: "turkey" });
+    deferWarmReactionVideoExport(latest);
     hideBanner();
     openEndTurnGallery("turkey");
   }
@@ -3135,7 +3155,8 @@
       player.reactions.push(reaction);
     }
     prependReactionCard(reaction, name);
-    warmReactionExports(reaction);
+    // PNG only here — video encode must wait until after the post-fire flash
+    warmReactionPngExport(reaction);
   }
 
   function captureReaction({ bust, label, name, score, hits }) {
@@ -3148,7 +3169,7 @@
       player.reactions.push(reaction);
     }
     prependReactionCard(reaction, name);
-    warmReactionExports(reaction);
+    warmReactionPngExport(reaction);
   }
 
   function ensureSelectedFrameIndex(reaction) {
@@ -3532,10 +3553,36 @@
       });
   }
 
+  /**
+   * Video encode is realtime + MediaRecorder — starting it right after capture
+   * starved the post-fire 0.5× flash on mobile. Only warm once flash/overlays
+   * are idle.
+   */
+  function deferWarmReactionVideoExport(reaction, delayMs = 400) {
+    if (!reactionHasClip(reaction)) return;
+    if (reaction._exportVideoBlob || reaction._exportVideoPromise) return;
+    if (reaction._exportVideoWarmTimer) {
+      clearTimeout(reaction._exportVideoWarmTimer);
+      reaction._exportVideoWarmTimer = null;
+    }
+
+    const tryWarm = () => {
+      reaction._exportVideoWarmTimer = null;
+      if (reaction._exportVideoBlob || reaction._exportVideoPromise) return;
+      if (reactionFlashPlaying || isOverlayClipPlaying()) {
+        reaction._exportVideoWarmTimer = setTimeout(tryWarm, 500);
+        return;
+      }
+      warmReactionVideoExport(reaction);
+    };
+
+    reaction._exportVideoWarmTimer = setTimeout(tryWarm, Math.max(0, delayMs));
+  }
+
   function warmReactionExports(reaction) {
     if (!reaction) return;
     warmReactionPngExport(reaction);
-    warmReactionVideoExport(reaction);
+    deferWarmReactionVideoExport(reaction);
   }
 
   async function getReactionPngExport(reactionOrUrl) {
