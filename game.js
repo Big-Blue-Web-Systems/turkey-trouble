@@ -1614,32 +1614,15 @@
     }
   }
 
-  /** 1s of source @ 0.5× → 2s on screen when there's no cheer spike. */
-  function defaultFlashTrim(frames, reaction) {
-    const need = Math.min(frames.length, Math.ceil(FLASH_SPIKE_MIN_SEC * REACTION_CLIP_FPS));
-    const sel = ensureSelectedFrameIndex(reaction);
-    let startFrame = Math.max(0, sel - Math.floor(need / 3));
-    if (startFrame + need > frames.length) startFrame = Math.max(0, frames.length - need);
-    const endFrame = Math.min(frames.length, startFrame + need);
-    return {
-      startFrame,
-      endFrame,
-      startSec: startFrame / REACTION_CLIP_FPS,
-      endSec: endFrame / REACTION_CLIP_FPS,
-    };
-  }
-
   /**
    * Play reaction frames (+ optional mic) in the expanded flash at `rate`.
-   * Fire! uses trimToSpike (cheer region, or 1s fallback → ~2s @ 0.5×).
-   * Bust plays the full clip at 2×. Audio is an SFX — respects mute.
+   * Prize: cheer spike region at 0.5×. Bust: full clip at 2×.
+   * Only called when a meaningful audio spike was detected. Audio is an SFX.
    */
   async function playFlashClipAtRate(frames, reaction, rate, opts = {}) {
     const playbackRate = rate > 0 ? rate : 1;
     const frameInterval = Math.max(16, Math.round(1000 / REACTION_CLIP_FPS / playbackRate));
-    const trim = opts.trimToSpike
-      ? reaction?.flashTrim || defaultFlashTrim(frames, reaction)
-      : null;
+    const trim = opts.trimToSpike ? reaction?.flashTrim : null;
     const startFrame = trim ? trim.startFrame : 0;
     const endFrame = trim ? trim.endFrame : frames.length;
     const startSec = trim ? trim.startSec : 0;
@@ -1687,8 +1670,10 @@
   }
 
   /**
-   * Expanded reaction peek — still, or clip at rate when Video Reaction is on.
-   * Always plays a cycling flash sting (prize vs turkey). Video mode: sting, then recorded clip.
+   * Expanded reaction flash.
+   * Always: cycling zinger over the selected-frame still.
+   * If video mode + meaningful mic spike: after the zinger, play the recording
+   * (prize spike @ 0.5×, full bust @ 2×). No spike → zinger only, then move on.
    * @param {object|string} reactionOrUrl
    * @param {{ rate?: number, trimToSpike?: boolean, kind?: "prize"|"turkey" }} [opts]
    */
@@ -1704,8 +1689,12 @@
     if (!dataUrl) return;
 
     const frames = reaction?.frames;
+    const hasMeaningfulAudio = !!reaction?.flashTrim;
     const playClip =
-      isReactionVideoMode() && Array.isArray(frames) && frames.length > 1;
+      isReactionVideoMode() &&
+      hasMeaningfulAudio &&
+      Array.isArray(frames) &&
+      frames.length > 1;
 
     // Cover the live camera with the stored snapshot, then enlarge that composite
     reactionFlash.hidden = false;
@@ -1719,17 +1708,16 @@
     syncLobbyMusic();
 
     try {
+      // Selected-frame thumbnail under the zinger either way
+      reactionFlashImage.src = dataUrl;
+      await decodeFlashImage();
+      await playFlashSting(kind);
+
       if (playClip) {
-        reactionFlashImage.src = frames[0] || dataUrl;
-        await decodeFlashImage();
-        // VO first, then 0.5× / 2× recorded playback
-        await playFlashSting(kind);
         await playFlashClipAtRate(frames, reaction, rate, { trimToSpike });
-      } else {
-        reactionFlashImage.src = dataUrl;
-        await decodeFlashImage();
-        // Photo mode: sting is the flash audio; hold at least REACTION_FLASH_MS
-        await Promise.all([playFlashSting(kind), waitMs(REACTION_FLASH_MS)]);
+      } else if (!effectsAllowed()) {
+        // Muted: no zinger length to wait on — brief still hold
+        await waitMs(REACTION_FLASH_MS);
       }
     } finally {
       stopFlashSting();
@@ -1752,7 +1740,7 @@
     if (turnOver) return;
     await playPrizeReveal(landed);
     if (turnOver) return;
-    // Prize sting → cheer spike at half speed (or sting alone if video off)
+    // Zinger; then cheer spike @ 0.5× only if mic had a real peak
     await flashReactionPhoto(latest, { rate: 0.5, trimToSpike: true, kind: "prize" });
     if (turnOver) return;
     canAct = true;
@@ -1769,7 +1757,7 @@
       reactionCapturePromise || Promise.resolve(),
     ]);
     const latest = players[currentPlayer]?.reactions?.at(-1) || null;
-    // Turkey sting → full bust clip at 2× (or sting alone if video off)
+    // Zinger; then full bust clip @ 2× only if mic had a real peak
     await flashReactionPhoto(latest, { rate: 2, kind: "turkey" });
     hideBanner();
     openEndTurnGallery("turkey");
