@@ -3461,8 +3461,13 @@
       return true;
     } catch (err) {
       if (err && err.name === "AbortError") {
-        // Instant abort in an iframe = lost gesture (no sheet). Slower = user dismissed.
-        if (isEmbeddedFrame() && performance.now() - started < 280) return false;
+        // Real dismiss usually still has transient activation; WebKit false-aborts
+        // after a lost gesture do not — fall through to host / Save chip.
+        if (navigator.userActivation?.isActive) return true;
+        if (isEmbeddedFrame()) {
+          if (typeof navigator.userActivation !== "undefined") return false;
+          if (performance.now() - started < 280) return false;
+        }
         return true;
       }
       return false;
