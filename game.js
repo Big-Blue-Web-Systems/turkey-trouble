@@ -2599,23 +2599,72 @@
   hitsIconImage.decoding = "async";
   hitsIconImage.src = "assets/crosshair-hit.png";
 
+  function ensureHitsIconLoaded() {
+    if (hitsIconImage.complete && hitsIconImage.naturalWidth) {
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      const done = () => resolve(!!(hitsIconImage.complete && hitsIconImage.naturalWidth));
+      hitsIconImage.addEventListener("load", done, { once: true });
+      hitsIconImage.addEventListener("error", done, { once: true });
+      // Re-kick decode in case the first attempt raced
+      if (!hitsIconImage.src) hitsIconImage.src = "assets/crosshair-hit.png";
+    });
+  }
+
+  /** Gold crosshair + contour drop-shadow matching .reaction-hud-stats CSS filters. */
   function drawGoldHitsIcon(ctx, x, y, size) {
     const icon = hitsIconImage;
     if (!icon.complete || !icon.naturalWidth) return;
-    const oc = document.createElement("canvas");
-    oc.width = size;
-    oc.height = size;
-    const octx = oc.getContext("2d");
-    if (!octx) return;
-    octx.drawImage(icon, 0, 0, size, size);
-    octx.globalCompositeOperation = "source-in";
-    octx.fillStyle = "#f0b429";
-    octx.fillRect(0, 0, size, size);
+
+    const makeTinted = (color) => {
+      const oc = document.createElement("canvas");
+      oc.width = size;
+      oc.height = size;
+      const octx = oc.getContext("2d");
+      if (!octx) return null;
+      octx.drawImage(icon, 0, 0, size, size);
+      octx.globalCompositeOperation = "source-in";
+      octx.fillStyle = color;
+      octx.fillRect(0, 0, size, size);
+      return oc;
+    };
+
+    const black = makeTinted("#000000");
+    const gold = makeTinted("#f0b429");
+    if (!black || !gold) return;
+
+    // CSS: drop-shadow(0 2px 3px) / (0 4px 12px) / (0 8px 28px) — scaled to icon size
+    const layers = [
+      { oy: Math.max(2, size * 0.12), blur: Math.max(3, size * 0.2), a: 1 },
+      { oy: Math.max(4, size * 0.25), blur: Math.max(10, size * 0.75), a: 0.95 },
+      { oy: Math.max(8, size * 0.5), blur: Math.max(18, size * 1.75), a: 0.85 },
+    ];
+
     ctx.save();
-    ctx.shadowColor = "rgba(0, 0, 0, 0.95)";
-    ctx.shadowBlur = Math.max(18, Math.round(size * 1.8));
-    ctx.shadowOffsetY = Math.max(4, Math.round(size * 0.35));
-    ctx.drawImage(oc, x, y);
+    for (const layer of layers) {
+      ctx.save();
+      ctx.globalAlpha = layer.a;
+      if (typeof ctx.filter === "string") {
+        // Soft silhouette under the glyph — same idea as CSS filter: drop-shadow
+        ctx.filter = `blur(${layer.blur}px)`;
+        ctx.drawImage(black, x, y + layer.oy);
+      } else {
+        ctx.shadowColor = `rgba(0, 0, 0, ${layer.a})`;
+        ctx.shadowBlur = layer.blur;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = layer.oy;
+        ctx.drawImage(black, x, y);
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    if (typeof ctx.filter === "string") ctx.filter = "none";
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.drawImage(gold, x, y);
     ctx.restore();
   }
 
@@ -3364,6 +3413,8 @@
     const dataUrl = reactionDisplayUrl(reaction) || reaction.dataUrl;
     if (!dataUrl) return null;
 
+    await ensureHitsIconLoaded();
+
     let img;
     try {
       img = await loadImageFromUrl(dataUrl);
@@ -3533,6 +3584,7 @@
       return null;
     }
 
+    await ensureHitsIconLoaded();
     const first = await loadImageFromUrl(frames[0]);
     const banner = getBannerEl();
     const srcW = first.naturalWidth || 640;
