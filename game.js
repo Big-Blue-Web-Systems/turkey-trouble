@@ -827,10 +827,11 @@
     }
   }
 
-  function setBankVisible(visible) {
+  function setBankVisible(enabled) {
+    // Always show Bag Cash so the control row stays balanced; only enable when baggable
     btnBank.hidden = false;
-    btnBank.classList.toggle("is-slot-hidden", !visible);
-    btnBank.disabled = !visible;
+    btnBank.classList.remove("is-slot-hidden");
+    btnBank.disabled = !enabled;
   }
 
   function updateActionButton() {

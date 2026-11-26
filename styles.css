@@ -1541,6 +1541,7 @@ body {
   grid-column: 2;
   grid-row: 2;
   display: grid;
+  /* Bag Cash left · Start/Pull/Fire right (same as mobile, short height on desktop) */
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem 0.6rem;
   justify-content: start;
@@ -1551,6 +1552,16 @@ body {
   margin-right: auto;
   margin-top: 1rem;
   margin-bottom: 0.75rem;
+}
+
+.controls .btn-bank {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.controls .btn-action {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .controls .btn-action,
@@ -1632,10 +1643,6 @@ body {
   box-shadow: none;
 }
 
-.btn-bank.is-slot-hidden {
-  visibility: hidden;
-  pointer-events: none;
-}
 
 .reactions-panel {
   grid-column: 1;
@@ -1909,15 +1916,8 @@ body {
     white-space: normal;
   }
 
-  /* Keep the right-hand thumb slot even when Bag Cash is unavailable */
-  .btn-bank.is-slot-hidden {
-    display: block;
-    visibility: hidden;
-    pointer-events: none;
-  }
-
   .reactions-panel {
-    order: 2;
+    order: 3;
     flex: none;
     width: 100%;
     max-width: 100%;
@@ -2007,7 +2007,7 @@ body {
   }
 
   .leaderboard {
-    order: 3;
+    order: 2;
     grid-column: auto;
     grid-row: auto;
     width: 100%;
