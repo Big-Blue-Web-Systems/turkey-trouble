@@ -4038,8 +4038,10 @@
         ? 0
         : Math.min(240, Math.max(72, tileW * 0.92));
       const sideGutter = horizontal ? 0 : reactionsW + colGap;
+      // Mobile: leave a couple px so subpixel rounding never makes frame > column
+      // (that used to crush .board via max-width and overlap the right border on tiles).
       const availableFrameW = horizontal
-        ? Math.max(160, columnW)
+        ? Math.max(160, columnW - 2)
         : Math.max(160, stageW - 2 * sideGutter);
       const availableBoardW = Math.max(140, availableFrameW - 2 * pad);
 
@@ -4055,8 +4057,9 @@
       const tileFromH = (availableBoardH - border - 5 * gap) / (4 * (3 / 5));
       // Mobile: fill column width so the light ring lines up with the Start button.
       // Desktop: still fit width + height in the viewport.
+      // Floor mobile tile width so 4 tracks + gaps + border never exceed the column.
       const next = horizontal
-        ? Math.max(48, tileFromW)
+        ? Math.max(48, Math.floor(tileFromW * 100) / 100)
         : Math.max(48, Math.min(tileFromW, tileFromH));
       boardInnerW = 4 * next + 5 * gap + border;
       if (Math.abs(next - tileW) < 0.25) {
@@ -4067,14 +4070,31 @@
     }
 
     gap = Math.max(4.5, Math.min(8, tileW * 0.04));
-    const bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
-    const bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
+    let bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
+    let bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
     // Inseparable: pad ≥ bulb radius + clearance + buffer so lights never meet the border
     pad = Math.max(
       bulbRadius + bulbClearance + 4,
       Math.max(10, Math.min(28, tileW * 0.11))
     );
     boardInnerW = 4 * tileW + 5 * gap + border;
+
+    // Final mobile clamp: frame (board + pad ring) must fit the column.
+    if (horizontal) {
+      const maxFrameW = Math.max(160, columnW - 2);
+      const maxBoardW = Math.max(140, maxFrameW - 2 * pad);
+      if (boardInnerW > maxBoardW) {
+        tileW = Math.max(48, Math.floor(((maxBoardW - border - 5 * gap) / 4) * 100) / 100);
+        gap = Math.max(4.5, Math.min(8, tileW * 0.04));
+        bulbRadius = Math.max(6, Math.min(12, tileW * 0.045));
+        bulbClearance = Math.max(5, Math.min(10, tileW * 0.035));
+        pad = Math.max(
+          bulbRadius + bulbClearance + 4,
+          Math.max(10, Math.min(28, tileW * 0.11))
+        );
+        boardInnerW = 4 * tileW + 5 * gap + border;
+      }
+    }
     const reactionsCol = Math.min(240, Math.max(72, tileW * 0.92));
 
     boardRow.style.setProperty("--fit-tile-w", `${tileW.toFixed(2)}px`);

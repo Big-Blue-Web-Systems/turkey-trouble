@@ -1112,8 +1112,11 @@ body {
 
   position: relative;
   box-sizing: border-box;
-  width: max-content;
-  max-width: 100%;
+  /* Lock to computed inner width — max-width:100% was crushing the border box on
+     narrow screens while tile tracks stayed fixed, so the right border overlapped tiles. */
+  width: var(--board-inner-w);
+  min-width: var(--board-inner-w);
+  max-width: none;
   margin-inline: 0;
   display: grid;
   grid-template-columns: repeat(4, var(--tile-w));
@@ -1867,8 +1870,11 @@ body {
     grid-row: auto;
     margin-block: 0.35rem 0.45rem;
     margin-inline: auto;
+    /* Frame sizes to the board + light pad; fitPlayArea keeps that within the column.
+       Avoid max-width:100% + border-box crushing the pad/board relationship. */
     width: max-content;
-    max-width: 100%;
+    max-width: none;
+    flex-shrink: 0;
   }
 
   .controls {
