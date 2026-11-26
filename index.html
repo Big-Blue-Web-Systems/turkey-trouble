@@ -30,7 +30,24 @@
 
     <section id="setup-panel" class="setup-panel">
       <div class="setup-actions">
-        <button id="btn-add-players" class="btn btn-players" type="button">Add Players</button>
+        <div class="play-mode-toggle" id="play-mode-toggle" role="group" aria-label="Play mode">
+          <button
+            type="button"
+            id="mode-single"
+            class="play-mode-option is-active"
+            aria-pressed="true"
+          >
+            Single
+          </button>
+          <button
+            type="button"
+            id="mode-multi"
+            class="play-mode-option"
+            aria-pressed="false"
+          >
+            Multi
+          </button>
+        </div>
         <div class="rounds-picker" id="rounds-picker">
           <span class="rounds-picker-label">Rounds</span>
           <div class="rounds-control">
@@ -53,19 +70,33 @@
             </ul>
           </div>
         </div>
-        <label class="capture-mode-toggle" for="capture-video-toggle">
-          <input
-            id="capture-video-toggle"
-            type="checkbox"
-            role="switch"
-            aria-checked="false"
-          />
-          <span class="capture-mode-switch" aria-hidden="true">
-            <span class="capture-mode-knob"></span>
-          </span>
-          <span class="capture-mode-text">Video Reaction</span>
-        </label>
-        <button id="btn-done-players" class="btn btn-start-game" type="button" hidden>Done</button>
+        <div class="setup-toggles">
+          <label class="capture-mode-toggle" for="capture-video-toggle">
+            <input
+              id="capture-video-toggle"
+              type="checkbox"
+              role="switch"
+              aria-checked="false"
+            />
+            <span class="capture-mode-switch" aria-hidden="true">
+              <span class="capture-mode-knob"></span>
+            </span>
+            <span class="capture-mode-text">Video Reaction</span>
+          </label>
+          <label class="capture-mode-toggle" for="lobby-music-toggle">
+            <input
+              id="lobby-music-toggle"
+              type="checkbox"
+              role="switch"
+              checked
+              aria-checked="true"
+            />
+            <span class="capture-mode-switch" aria-hidden="true">
+              <span class="capture-mode-knob"></span>
+            </span>
+            <span class="capture-mode-text">Background Music</span>
+          </label>
+        </div>
       </div>
       <div id="players-editor" class="players-editor" hidden>
         <form id="add-player-form" class="add-player-form">
@@ -78,11 +109,11 @@
       </div>
     </section>
 
-    <div id="turn-hud" class="turn-hud" hidden>
+    <div id="turn-hud" class="turn-hud">
       <div class="scoreboard" id="scoreboard" aria-live="polite">
         <span id="round-label" class="round-label" hidden>Round #1</span>
         <div class="scoreboard-line">
-          <span class="score-label" id="score-label">Turn</span>
+          <button type="button" class="score-label" id="score-label" title="Click to rename">Player 1</button>
           <span id="score" class="score-value">$0</span>
         </div>
       </div>
@@ -151,11 +182,8 @@
         </div>
 
         <section id="controls" class="controls">
-          <button id="btn-action" class="btn btn-action is-start" type="button">Pull!</button>
+          <button id="btn-action" class="btn btn-action is-start" type="button">Start Game</button>
           <button id="btn-bank" class="btn btn-bank is-slot-hidden" type="button" disabled>Bag Cash</button>
-          <p id="solo-warning" class="solo-warning" hidden>
-            You're about to start a single player game. Press <strong class="solo-pull">Pull!</strong> again to begin.
-          </p>
         </section>
       </div>
 
@@ -183,6 +211,12 @@
       <button id="preview-close" class="preview-close" type="button" aria-label="Close preview">×</button>
       <div class="preview-frame">
         <img id="preview-image" class="preview-image" alt="Reaction preview" />
+        <img
+          id="preview-pip"
+          class="clip-pip"
+          alt="Selected frame"
+          hidden
+        />
         <button id="preview-download" class="dl-circle" type="button" aria-label="Download reaction">
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
             <path
@@ -191,6 +225,25 @@
             />
           </svg>
         </button>
+      </div>
+      <div id="preview-clip" class="clip-player" hidden>
+        <div class="clip-toolbar">
+          <button type="button" id="preview-play" class="clip-play" aria-label="Play">▶</button>
+          <input
+            type="range"
+            id="preview-scrub"
+            class="clip-scrub"
+            min="0"
+            max="0"
+            value="0"
+            aria-label="Scrub reaction frames"
+          />
+          <span id="preview-time" class="clip-time">0:00 / 0:03</span>
+        </div>
+        <button type="button" id="preview-select-frame" class="btn btn-select-frame">
+          Select Frame
+        </button>
+        <p id="preview-select-status" class="clip-select-status" hidden>Frame selected</p>
       </div>
     </div>
   </div>

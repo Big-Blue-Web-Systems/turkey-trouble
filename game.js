@@ -28,8 +28,10 @@
   const TILE_PULSE_MS = 550;
   const TILE_FLIP_MS = 450;
   const REACTION_FLASH_MS = 1000;
+  /** Fallback only if overlay duration can't be measured */
   const REACTION_CLIP_MS = 3000;
   const REACTION_CLIP_FPS = 10;
+  const REACTION_CLIP_MAX_MS = 20000;
   const FAVORITES_KEY = "turkeyTroubleFavorites";
 
   const board = document.getElementById("board");
@@ -65,13 +67,15 @@
   const btnBank = document.getElementById("btn-bank");
   const controls = document.getElementById("controls");
   const setupPanel = document.getElementById("setup-panel");
-  const btnAddPlayers = document.getElementById("btn-add-players");
+  const playModeToggle = document.getElementById("play-mode-toggle");
+  const modeSingleBtn = document.getElementById("mode-single");
+  const modeMultiBtn = document.getElementById("mode-multi");
   const playersEditor = document.getElementById("players-editor");
   const addPlayerForm = document.getElementById("add-player-form");
   const playerNameInput = document.getElementById("player-name-input");
   const playerList = document.getElementById("player-list");
-  const btnDonePlayers = document.getElementById("btn-done-players");
   const btnStartFromSetup = document.getElementById("btn-start-from-setup");
+  let multiPlayerMode = false;
   const roundsPicker = document.getElementById("rounds-picker");
   const roundsTrigger = document.getElementById("rounds-trigger");
   const roundsTriggerValue = document.getElementById("rounds-trigger-value");
@@ -79,8 +83,9 @@
   const scoreboard = document.getElementById("scoreboard");
   const roundLabel = document.getElementById("round-label");
   const captureVideoToggle = document.getElementById("capture-video-toggle");
+  const lobbyMusicToggle = document.getElementById("lobby-music-toggle");
+  let lobbyMusicEnabled = !lobbyMusicToggle || lobbyMusicToggle.checked;
   let selectedRounds = 1;
-  const soloWarning = document.getElementById("solo-warning");
   const leaderboard = document.getElementById("leaderboard");
   const leaderboardList = document.getElementById("leaderboard-list");
   const modalRoot = document.getElementById("modal-root");
@@ -93,8 +98,19 @@
   const previewImage = document.getElementById("preview-image");
   const previewDownload = document.getElementById("preview-download");
   const previewClose = document.getElementById("preview-close");
+  const previewClip = document.getElementById("preview-clip");
+  const previewPlay = document.getElementById("preview-play");
+  const previewScrub = document.getElementById("preview-scrub");
+  const previewTime = document.getElementById("preview-time");
+  const previewSelectFrame = document.getElementById("preview-select-frame");
+  const previewSelectStatus = document.getElementById("preview-select-status");
+  const previewPip = document.getElementById("preview-pip");
   let previewDataUrl = "";
   let previewFilename = "reaction.jpg";
+  /** @type {ReturnType<typeof createClipPlayer>|null} */
+  let previewClipPlayer = null;
+  /** @type {{dataUrl:string,frames?:string[],frameIndex?:number,selectedFrameIndex?:number,isClip?:boolean,label:string,bust:boolean}|null} */
+  let previewReaction = null;
 
   /** @type {{ value: number, isTurkey: boolean, el: HTMLButtonElement }[]} */
   let tiles = [];
@@ -123,7 +139,9 @@
   let dragFromIndex = null;
   let selectedFavoriteIndex = -1;
   let endTurnPlayerIndex = -1;
-  let soloStartArmed = false;
+  let renamingActivePlayer = false;
+  /** @type {HTMLInputElement|null} */
+  let scoreLabelEdit = null;
 
   /** @type {HTMLSpanElement[]} */
   let boardBulbs = [];
@@ -339,10 +357,12 @@
     tile.el.setAttribute("aria-label", "Turkey");
     const label = tile.el.querySelector(".label");
     if (label) label.remove();
+    playCardFlipSfx();
     await waitMs(TILE_FLIP_MS);
 
     clearTileRevealClasses();
     tileRevealInProgress = false;
+    syncLobbyMusic();
   }
 
   function formatValue(n) {
@@ -381,7 +401,7 @@
     btnAction.classList.remove("is-start", "is-stop", "is-keep");
 
     if (!gameStarted) {
-      btnAction.textContent = "Pull!";
+      btnAction.textContent = "Start Game";
       btnAction.classList.add("is-start");
       btnAction.disabled = false;
       setBankVisible(false);
@@ -420,14 +440,25 @@
 
   function showBanner(text, isTurkey = false) {
     resultBanner.hidden = false;
+    resultBanner.classList.remove("is-centered");
     resultBanner.textContent = text;
     resultBanner.classList.toggle("is-turkey", isTurkey);
+  }
+
+  function showTurkeyBustMessage() {
+    resultBanner.hidden = false;
+    resultBanner.classList.add("is-turkey", "is-centered");
+    resultBanner.innerHTML = `
+      <span class="banner-title">Turkey Tom Got You!</span>
+      <span class="banner-sub">You've lost all your cash</span>
+    `;
   }
 
   function hideBanner() {
     resultBanner.hidden = true;
     resultBanner.textContent = "";
-    resultBanner.classList.remove("is-turkey");
+    resultBanner.innerHTML = "";
+    resultBanner.classList.remove("is-turkey", "is-centered");
   }
 
   function clearReactionStrip() {
@@ -574,9 +605,11 @@
       `;
       li.querySelector(".remove").addEventListener("click", () => {
         players.splice(index, 1);
+        if (currentPlayer >= players.length) currentPlayer = Math.max(0, players.length - 1);
         renderPlayerList();
         syncSetupButtons();
         renderLeaderboard();
+        syncTurnHud();
       });
 
       li.addEventListener("dragstart", () => {
@@ -610,10 +643,19 @@
     return !!captureVideoToggle?.checked;
   }
 
+  function syncPlayModeToggle() {
+    if (!modeSingleBtn || !modeMultiBtn) return;
+    modeSingleBtn.classList.toggle("is-active", !multiPlayerMode);
+    modeMultiBtn.classList.toggle("is-active", multiPlayerMode);
+    modeSingleBtn.setAttribute("aria-pressed", multiPlayerMode ? "false" : "true");
+    modeMultiBtn.setAttribute("aria-pressed", multiPlayerMode ? "true" : "false");
+    modeSingleBtn.disabled = gameStarted;
+    modeMultiBtn.disabled = gameStarted;
+    if (playModeToggle) playModeToggle.setAttribute("aria-disabled", gameStarted ? "true" : "false");
+  }
+
   function syncSetupButtons() {
     const editorOpen = !playersEditor.hidden;
-    btnDonePlayers.hidden = !(gameStarted && editorOpen);
-    btnAddPlayers.hidden = editorOpen;
     btnStartFromSetup.hidden = gameStarted || !editorOpen;
     roundsTrigger.disabled = gameStarted;
     if (captureVideoToggle) {
@@ -622,6 +664,7 @@
     }
     if (gameStarted) closeRoundsMenu();
     if (roundsPicker) roundsPicker.hidden = false;
+    syncPlayModeToggle();
   }
 
   function readTotalRounds() {
@@ -658,12 +701,112 @@
     return Math.min((player.roundsPlayed || 0) + 1, totalRounds);
   }
 
-  function syncTurnHud() {
-    turnHud.hidden = !gameStarted;
+  function makeBlankPlayer(name) {
+    return {
+      name,
+      banked: 0,
+      reactions: [],
+      favorite: null,
+      done: false,
+      roundsPlayed: 0,
+    };
+  }
+
+  function ensureActivePlayerSlot() {
+    if (players.length === 0) {
+      players.push(makeBlankPlayer("Player 1"));
+      currentPlayer = 0;
+      renderPlayerList();
+    }
+    if (currentPlayer < 0 || currentPlayer >= players.length) currentPlayer = 0;
+  }
+
+  function commitActivePlayerRename(rawName) {
+    ensureActivePlayerSlot();
+    const fallback = `Player ${currentPlayer + 1}`;
+    const name = String(rawName || "")
+      .trim()
+      .slice(0, 24) || fallback;
+    players[currentPlayer].name = name;
+    renamingActivePlayer = false;
+    if (scoreLabelEdit) {
+      scoreLabelEdit.remove();
+      scoreLabelEdit = null;
+    }
+    scoreLabel.hidden = false;
+    scoreLabel.textContent = name;
+    renderPlayerList();
+    renderLeaderboard();
+  }
+
+  function cancelActivePlayerRename() {
+    renamingActivePlayer = false;
+    if (scoreLabelEdit) {
+      scoreLabelEdit.remove();
+      scoreLabelEdit = null;
+    }
+    scoreLabel.hidden = false;
     const player = players[currentPlayer];
-    if (!gameStarted || !player) return;
-    scoreLabel.textContent = player.name;
-    const multiRound = totalRounds > 1;
+    if (player) scoreLabel.textContent = player.name;
+  }
+
+  function beginActivePlayerRename() {
+    if (renamingActivePlayer || players.length === 0) return;
+    renamingActivePlayer = true;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "score-label-edit";
+    input.maxLength = 24;
+    input.value = players[currentPlayer].name;
+    input.setAttribute("aria-label", "Edit player name");
+    input.style.width = `${Math.max(4, Math.min(24, input.value.length + 2))}ch`;
+    scoreLabel.hidden = true;
+    scoreLabel.after(input);
+    scoreLabelEdit = input;
+    input.focus();
+    input.select();
+
+    const finish = (commit) => {
+      if (!renamingActivePlayer) return;
+      if (commit) commitActivePlayerRename(input.value);
+      else cancelActivePlayerRename();
+    };
+
+    input.addEventListener("input", () => {
+      input.style.width = `${Math.max(4, Math.min(24, input.value.length + 2))}ch`;
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        finish(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        finish(false);
+      }
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  function syncTurnHud() {
+    turnHud.hidden = false;
+    if (players.length === 0) {
+      if (!renamingActivePlayer) {
+        scoreLabel.textContent = "Add players";
+        scoreLabel.hidden = false;
+      }
+      scoreboard.classList.remove("is-multi-round");
+      roundLabel.hidden = true;
+      return;
+    }
+    if (currentPlayer < 0 || currentPlayer >= players.length) currentPlayer = 0;
+    const player = players[currentPlayer];
+    if (!renamingActivePlayer) {
+      scoreLabel.textContent = player.name;
+      scoreLabel.hidden = false;
+    }
+    const multiRound = gameStarted && totalRounds > 1;
     scoreboard.classList.toggle("is-multi-round", multiRound);
     roundLabel.hidden = !multiRound;
     if (multiRound) {
@@ -730,6 +873,67 @@
     if (audioCtx.state === "suspended") {
       audioCtx.resume();
     }
+  }
+
+  const lobbyMusic = new Audio("assets/quirky-loading-theme.ogg");
+  lobbyMusic.loop = true;
+  lobbyMusic.preload = "auto";
+  lobbyMusic.volume = 0.32;
+
+  const cardFlipSfx = new Audio("assets/card-flip-whoosh.mp3");
+  cardFlipSfx.preload = "auto";
+  cardFlipSfx.volume = 0.75;
+  cardFlipSfx.addEventListener("ended", () => syncLobbyMusic());
+
+  function isOverlayClipPlaying() {
+    return [fireVideo, bustVideo].some((v) => v && v.classList.contains("is-showing"));
+  }
+
+  function isCardFlipSfxPlaying() {
+    return !cardFlipSfx.paused && !cardFlipSfx.ended;
+  }
+
+  function playCardFlipSfx() {
+    try {
+      cardFlipSfx.pause();
+      cardFlipSfx.currentTime = 0;
+      const playAttempt = cardFlipSfx.play();
+      if (playAttempt) playAttempt.catch(() => {});
+    } catch (_) {
+      /* ignore playback errors */
+    }
+    syncLobbyMusic();
+  }
+
+  function syncLobbyMusic() {
+    const shouldPlay =
+      lobbyMusicEnabled &&
+      !document.hidden &&
+      !spinning &&
+      !isOverlayClipPlaying() &&
+      !isCardFlipSfxPlaying();
+    if (!shouldPlay) {
+      if (!lobbyMusic.paused) lobbyMusic.pause();
+      return;
+    }
+    if (!lobbyMusic.paused) return;
+    const playAttempt = lobbyMusic.play();
+    if (playAttempt) playAttempt.catch(() => {});
+  }
+
+  function setLobbyMusicEnabled(on) {
+    lobbyMusicEnabled = !!on;
+    if (lobbyMusicToggle) {
+      lobbyMusicToggle.checked = lobbyMusicEnabled;
+      lobbyMusicToggle.setAttribute("aria-checked", lobbyMusicEnabled ? "true" : "false");
+    }
+    if (lobbyMusicEnabled) unlockLobbyMusic();
+    else syncLobbyMusic();
+  }
+
+  function unlockLobbyMusic() {
+    ensureAudio();
+    syncLobbyMusic();
   }
 
   function playGobble() {
@@ -829,6 +1033,7 @@
     turkeyBlast.hidden = true;
     turkeyBlast.setAttribute("aria-hidden", "true");
     cameraWell.classList.remove("is-blasting");
+    syncLobbyMusic();
   }
 
   function playOverlayVideo(video) {
@@ -849,6 +1054,7 @@
           turkeyBlast.setAttribute("aria-hidden", "true");
           cameraWell.classList.remove("is-blasting");
         }
+        syncLobbyMusic();
         resolve();
       };
 
@@ -868,6 +1074,7 @@
       video.playsInline = true;
       video.onended = finish;
       video.onerror = finish;
+      syncLobbyMusic();
 
       const startPlayback = async () => {
         try {
@@ -885,6 +1092,7 @@
             finish();
           }
         }
+        syncLobbyMusic();
       };
 
       startPlayback();
@@ -940,6 +1148,7 @@
     spinning = true;
     updateActionButton();
     ensureAudio();
+    syncLobbyMusic();
     tickSpin();
   }
 
@@ -967,6 +1176,7 @@
     const landed = tiles[litIndex];
     if (!landed) {
       updateActionButton();
+      syncLobbyMusic();
       return;
     }
 
@@ -980,9 +1190,22 @@
     const reactionLabel = wasTurkey ? "Bust!" : `+${formatValue(awardedValue)}`;
 
     if (wasTurkey) {
-      // Still mode: snap at 1s. Video mode: wait and record after bust ends.
+      setTurnScore(0);
+      turnOver = true;
+      canAct = false;
+      awaitingChoice = false;
+      playSting("bust");
+      updateActionButton();
+      // Start bust playback in the same click turn so audio/video unlock reliably
+      const bustPromise = playTurkeyAnimation();
       if (isReactionVideoMode()) {
-        reactionCapturePromise = Promise.resolve();
+        // Record from Fire!/bust start through the end of the bust clip
+        reactionCapturePromise = captureReactionClip({
+          bust: true,
+          label: reactionLabel,
+          name: playerName,
+          untilPromise: bustPromise,
+        });
       } else {
         reactionCapturePromise = scheduleStillReaction({
           bust: true,
@@ -990,24 +1213,18 @@
           name: playerName,
         });
       }
-      setTurnScore(0);
-      turnOver = true;
-      canAct = false;
-      awaitingChoice = false;
-      showBanner("TURKEY! Turn over", true);
-      playSting("bust");
-      updateActionButton();
-      // Start bust playback in the same click turn so audio/video unlock reliably
-      const bustPromise = playTurkeyAnimation();
       finishTurnAfterTurkey(bustPromise);
       return;
     }
 
+    const firePromise = playFireVideo();
     if (isReactionVideoMode()) {
+      // Record from Fire! start through the end of the fire clip
       reactionCapturePromise = captureReactionClip({
         bust: false,
         label: reactionLabel,
         name: playerName,
+        untilPromise: firePromise,
       });
     } else {
       reactionCapturePromise = scheduleStillReaction({
@@ -1017,7 +1234,6 @@
       });
     }
 
-    const firePromise = playFireVideo();
     scheduleFireHitAmount(formatValue(awardedValue));
     setTurnScore(turnScore + awardedValue);
     hideBanner();
@@ -1082,32 +1298,59 @@
 
   async function finishTurnAfterTurkey(bustPromise) {
     await (bustPromise || playTurkeyAnimation());
-    const playerName = players[currentPlayer]?.name || "Player";
-    if (isReactionVideoMode()) {
-      await captureReactionClip({
-        bust: true,
-        label: "Bust!",
-        name: playerName,
-      });
-    } else {
-      captureReaction({
-        bust: true,
-        label: "Bust!",
-        name: playerName,
-      });
-      await (reactionCapturePromise || Promise.resolve());
-    }
+    showTurkeyBustMessage();
+    await (reactionCapturePromise || Promise.resolve());
     const latest = players[currentPlayer]?.reactions?.at(-1);
-    const reactionToShow = latest?.dataUrl || null;
+    const reactionToShow = reactionDisplayUrl(latest) || null;
     await flashReactionPhoto(reactionToShow);
     openEndTurnGallery("turkey");
   }
 
-  function drawReactionFrame(ctx, w, h) {
+  /** Match object-fit: cover — crop the stream to the on-screen camera well aspect. */
+  function getReactionCoverCrop() {
+    const vw = camera.videoWidth || 640;
+    const vh = camera.videoHeight || 480;
+    const dw = camera.clientWidth || cameraWell.clientWidth || vw;
+    const dh = camera.clientHeight || cameraWell.clientHeight || vh;
+    if (!vw || !vh || !dw || !dh) {
+      return { sx: 0, sy: 0, sw: vw, sh: vh, w: vw, h: vh };
+    }
+    const displayAspect = dw / dh;
+    const videoAspect = vw / vh;
+    let sx;
+    let sy;
+    let sw;
+    let sh;
+    if (videoAspect > displayAspect) {
+      sh = vh;
+      sw = vh * displayAspect;
+      sx = (vw - sw) / 2;
+      sy = 0;
+    } else {
+      sw = vw;
+      sh = vw / displayAspect;
+      sx = 0;
+      sy = (vh - sh) / 2;
+    }
+    return {
+      sx,
+      sy,
+      sw,
+      sh,
+      w: Math.max(1, Math.round(sw)),
+      h: Math.max(1, Math.round(sh)),
+    };
+  }
+
+  function drawReactionFrame(ctx, w, h, crop) {
     ctx.save();
     ctx.translate(w, 0);
     ctx.scale(-1, 1);
-    ctx.drawImage(camera, 0, 0, w, h);
+    if (crop) {
+      ctx.drawImage(camera, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h);
+    } else {
+      ctx.drawImage(camera, 0, 0, w, h);
+    }
     ctx.restore();
 
     const banner = bannerImage.complete && bannerImage.naturalWidth ? bannerImage : cameraBorder;
@@ -1118,24 +1361,254 @@
 
   function grabReactionFrameDataUrl() {
     if (!camera.srcObject) return null;
-    const w = camera.videoWidth || 640;
-    const h = camera.videoHeight || 480;
-    captureCanvas.width = w;
-    captureCanvas.height = h;
+    const crop = getReactionCoverCrop();
+    captureCanvas.width = crop.w;
+    captureCanvas.height = crop.h;
     const ctx = captureCanvas.getContext("2d");
-    drawReactionFrame(ctx, w, h);
+    drawReactionFrame(ctx, crop.w, crop.h, crop);
     return captureCanvas.toDataURL("image/jpeg", 0.8);
   }
 
-  function prependReactionCard(dataUrl, label, bust, name) {
+  function formatClipTimestamp(frameIndex) {
+    const ms = Math.round((Math.max(0, frameIndex) / REACTION_CLIP_FPS) * 1000);
+    const sec = Math.floor(ms / 1000);
+    const tenths = Math.floor((ms % 1000) / 100);
+    return `${sec}.${tenths}s`;
+  }
+
+  function clipDurationLabel(frameCount) {
+    const last = Math.max(0, frameCount - 1);
+    return formatClipTimestamp(last);
+  }
+
+  function syncReactionCardThumbs(reaction) {
+    if (!reaction || !reactionStrip) return;
+    const url = reactionDisplayUrl(reaction);
+    reactionStrip.querySelectorAll(".reaction-card").forEach((card) => {
+      if (card._reaction !== reaction) return;
+      const img = card.querySelector("img");
+      if (img) img.src = url;
+    });
+  }
+
+  function updatePipEl(pipEl, reaction) {
+    if (!pipEl) return;
+    const url = reactionDisplayUrl(reaction);
+    if (!url || !reaction.frames?.length) {
+      pipEl.hidden = true;
+      pipEl.removeAttribute("src");
+      return;
+    }
+    pipEl.hidden = false;
+    pipEl.src = url;
+  }
+
+  /**
+   * @param {{
+   *   reaction: {dataUrl:string,frames?:string[],frameIndex?:number,selectedFrameIndex?:number},
+   *   imgEl: HTMLImageElement,
+   *   playBtn: HTMLButtonElement,
+   *   scrubEl: HTMLInputElement,
+   *   timeEl: HTMLElement,
+   *   pipEl?: HTMLImageElement|null,
+   *   hoverRoot?: HTMLElement|null,
+   *   onFrameChange?: (url:string)=>void,
+   * }} opts
+   */
+  function createClipPlayer({ reaction, imgEl, playBtn, scrubEl, timeEl, pipEl, hoverRoot, onFrameChange }) {
+    const frames = reaction?.frames || [];
+    const last = Math.max(0, frames.length - 1);
+    const interval = Math.round(1000 / REACTION_CLIP_FPS);
+    let playing = false;
+    let timer = null;
+    let destroyed = false;
+    let playhead = ensureSelectedFrameIndex(reaction);
+
+    scrubEl.min = "0";
+    scrubEl.max = String(last);
+    scrubEl.step = "1";
+    updatePipEl(pipEl, reaction);
+
+    function renderTime(idx) {
+      timeEl.textContent = `${formatClipTimestamp(idx)} / ${clipDurationLabel(frames.length)}`;
+    }
+
+    function showPlayhead(index) {
+      if (destroyed || !frames.length) return "";
+      playhead = Math.min(last, Math.max(0, index));
+      const url = frames[playhead];
+      imgEl.src = url;
+      scrubEl.value = String(playhead);
+      renderTime(playhead);
+      onFrameChange?.(url, false);
+      return url;
+    }
+
+    function stopTimer() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    }
+
+    function pause() {
+      playing = false;
+      stopTimer();
+      playBtn.textContent = "▶";
+      playBtn.setAttribute("aria-label", "Play");
+    }
+
+    function play() {
+      if (destroyed || frames.length < 2 || playing) return;
+      playing = true;
+      playBtn.textContent = "❚❚";
+      playBtn.setAttribute("aria-label", "Pause");
+      const tick = () => {
+        if (!playing || destroyed) return;
+        let next = playhead + 1;
+        if (next > last) next = 0;
+        showPlayhead(next);
+        timer = setTimeout(tick, interval);
+      };
+      timer = setTimeout(tick, interval);
+    }
+
+    function toggle() {
+      if (playing) pause();
+      else play();
+    }
+
+    function selectCurrentFrame() {
+      const url = selectReactionFrame(reaction, playhead);
+      updatePipEl(pipEl, reaction);
+      syncReactionCardThumbs(reaction);
+      return url;
+    }
+
+    // Start on the selected thumbnail frame
+    showPlayhead(ensureSelectedFrameIndex(reaction));
+
+    const onPlayClick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggle();
+    };
+    const onScrubInput = () => {
+      pause();
+      showPlayhead(Number(scrubEl.value));
+    };
+    const onEnter = () => play();
+    const onLeave = () => {
+      pause();
+      // Return main view to the selected thumbnail frame
+      showPlayhead(ensureSelectedFrameIndex(reaction));
+    };
+
+    playBtn.addEventListener("click", onPlayClick);
+    scrubEl.addEventListener("input", onScrubInput);
+    if (hoverRoot) {
+      hoverRoot.addEventListener("mouseenter", onEnter);
+      hoverRoot.addEventListener("mouseleave", onLeave);
+    }
+
+    return {
+      play,
+      pause,
+      showPlayhead,
+      selectCurrentFrame,
+      getPlayhead: () => playhead,
+      isPlaying: () => playing,
+      destroy() {
+        destroyed = true;
+        pause();
+        playBtn.removeEventListener("click", onPlayClick);
+        scrubEl.removeEventListener("input", onScrubInput);
+        if (hoverRoot) {
+          hoverRoot.removeEventListener("mouseenter", onEnter);
+          hoverRoot.removeEventListener("mouseleave", onLeave);
+        }
+      },
+    };
+  }
+
+  function buildClipPlayerMarkup(reaction) {
+    const last = Math.max(0, (reaction.frames?.length || 1) - 1);
+    const idx = ensureSelectedFrameIndex(reaction);
+    return `
+      <div class="clip-player" data-clip-root>
+        <div class="clip-toolbar">
+          <button type="button" class="clip-play" data-clip-play aria-label="Play">▶</button>
+          <input
+            type="range"
+            class="clip-scrub"
+            data-clip-scrub
+            min="0"
+            max="${last}"
+            value="${idx}"
+            aria-label="Scrub reaction frames"
+          />
+          <span class="clip-time" data-clip-time>${formatClipTimestamp(idx)} / ${clipDurationLabel(reaction.frames.length)}</span>
+        </div>
+        <button type="button" class="btn btn-select-frame" data-clip-select>Select Frame</button>
+        <p class="clip-select-status" data-clip-status hidden>Frame selected</p>
+      </div>
+    `;
+  }
+
+  function bindClipPlayerIn(root, reaction, { hoverRoot, onFrameChange, onSelect } = {}) {
+    const playBtn = root.querySelector("[data-clip-play]");
+    const scrubEl = root.querySelector("[data-clip-scrub]");
+    const timeEl = root.querySelector("[data-clip-time]");
+    const selectBtn = root.querySelector("[data-clip-select]");
+    const statusEl = root.querySelector("[data-clip-status]");
+    const media = root.previousElementSibling?.classList?.contains("g-media")
+      ? root.previousElementSibling
+      : root.parentElement?.querySelector?.(".g-media");
+    const imgEl = media?.querySelector?.("img.g-playback, img:not(.clip-pip)") || media?.querySelector?.("img");
+    const pipEl = media?.querySelector?.(".clip-pip, [data-clip-pip]");
+    if (!playBtn || !scrubEl || !timeEl || !imgEl) return null;
+
+    const player = createClipPlayer({
+      reaction,
+      imgEl,
+      playBtn,
+      scrubEl,
+      timeEl,
+      pipEl,
+      hoverRoot: hoverRoot || media || imgEl,
+      onFrameChange,
+    });
+
+    selectBtn?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      player.pause();
+      const url = player.selectCurrentFrame();
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.textContent = "Frame selected";
+        clearTimeout(selectBtn._statusTimer);
+        selectBtn._statusTimer = setTimeout(() => {
+          statusEl.hidden = true;
+        }, 1200);
+      }
+      onSelect?.(url);
+    });
+
+    return player;
+  }
+
+  function prependReactionCard(reaction, name) {
+    const dataUrl = reactionDisplayUrl(reaction);
     const card = document.createElement("article");
-    card.className = "reaction-card" + (bust ? " is-bust" : "");
+    card.className = "reaction-card" + (reaction.bust ? " is-bust" : "");
+    card._reaction = reaction;
     card.innerHTML = `
       <img src="${dataUrl}" alt="Reaction from ${escapeHtml(name)}" />
-      <div class="meta"><strong>${label}</strong>${escapeHtml(name)}</div>
+      <div class="meta"><strong>${escapeHtml(reaction.label)}</strong>${escapeHtml(name)}</div>
     `;
     card.addEventListener("click", () => {
-      openReactionPreview(dataUrl, `${name}-reaction.jpg`);
+      openReactionPreview(reaction, `${name}-reaction.jpg`);
     });
     reactionStrip.prepend(card);
     reactionFocusIndex = 0;
@@ -1154,65 +1627,98 @@
     });
   }
 
-  async function captureReactionClip({ bust, label, name }) {
+  async function captureReactionClip({ bust, label, name, untilPromise }) {
     if (!camera.srcObject) return;
     const frames = [];
     const interval = Math.round(1000 / REACTION_CLIP_FPS);
-    const frameCount = Math.max(1, Math.round(REACTION_CLIP_MS / interval));
+    const started = performance.now();
+    let stop = false;
+    const markStop = () => {
+      stop = true;
+    };
+    if (untilPromise && typeof untilPromise.then === "function") {
+      untilPromise.then(markStop, markStop);
+    } else {
+      setTimeout(markStop, REACTION_CLIP_MS);
+    }
 
-    for (let i = 0; i < frameCount; i++) {
+    // Capture from Fire!/bust start until the overlay clip ends
+    while (!stop && performance.now() - started < REACTION_CLIP_MAX_MS) {
       const frame = grabReactionFrameDataUrl();
       if (frame) frames.push(frame);
-      if (i < frameCount - 1) await waitMs(interval);
+      await waitMs(interval);
     }
+    const last = grabReactionFrameDataUrl();
+    if (last) frames.push(last);
 
     if (!frames.length) return;
 
-    const frameIndex = Math.min(frames.length - 1, Math.floor(frames.length / 2));
-    const dataUrl = frames[frameIndex];
+    const selectedFrameIndex = Math.min(frames.length - 1, Math.floor(frames.length / 2));
+    const dataUrl = frames[selectedFrameIndex];
+    const reaction = {
+      dataUrl,
+      frames,
+      frameIndex: selectedFrameIndex,
+      selectedFrameIndex,
+      isClip: true,
+      label,
+      bust,
+    };
     const player = players[currentPlayer];
     if (player) {
-      player.reactions.push({
-        dataUrl,
-        frames,
-        frameIndex,
-        isClip: true,
-        label,
-        bust,
-      });
+      player.reactions.push(reaction);
     }
-    prependReactionCard(dataUrl, label, bust, name);
+    prependReactionCard(reaction, name);
   }
 
   function captureReaction({ bust, label, name }) {
     const dataUrl = grabReactionFrameDataUrl();
     if (!dataUrl) return;
 
+    const reaction = { dataUrl, label, bust };
     const player = players[currentPlayer];
     if (player) {
-      player.reactions.push({ dataUrl, label, bust });
+      player.reactions.push(reaction);
     }
-    prependReactionCard(dataUrl, label, bust, name);
+    prependReactionCard(reaction, name);
+  }
+
+  function ensureSelectedFrameIndex(reaction) {
+    if (!reaction?.frames?.length) return 0;
+    const last = reaction.frames.length - 1;
+    if (reaction.selectedFrameIndex == null) {
+      reaction.selectedFrameIndex = Math.min(
+        last,
+        Math.max(0, reaction.frameIndex ?? Math.floor(last / 2))
+      );
+    }
+    reaction.selectedFrameIndex = Math.min(last, Math.max(0, reaction.selectedFrameIndex));
+    reaction.frameIndex = reaction.selectedFrameIndex;
+    reaction.dataUrl = reaction.frames[reaction.selectedFrameIndex];
+    return reaction.selectedFrameIndex;
   }
 
   function reactionDisplayUrl(reaction) {
     if (!reaction) return "";
     if (reaction.frames?.length) {
-      const idx = Math.min(
-        reaction.frames.length - 1,
-        Math.max(0, reaction.frameIndex ?? Math.floor(reaction.frames.length / 2))
-      );
+      const idx = ensureSelectedFrameIndex(reaction);
       return reaction.frames[idx] || reaction.dataUrl;
     }
     return reaction.dataUrl;
   }
 
-  function setReactionFrame(reaction, index) {
+  function selectReactionFrame(reaction, index) {
     if (!reaction?.frames?.length) return reaction?.dataUrl || "";
     const idx = Math.min(reaction.frames.length - 1, Math.max(0, index));
+    reaction.selectedFrameIndex = idx;
     reaction.frameIndex = idx;
     reaction.dataUrl = reaction.frames[idx];
     return reaction.dataUrl;
+  }
+
+  function setReactionFrame(reaction, index) {
+    // Back-compat alias used by favorite picking — locks the selected thumbnail
+    return selectReactionFrame(reaction, index);
   }
 
   function downloadReactionWithBanner(dataUrl, filename) {
@@ -1237,12 +1743,50 @@
     img.src = dataUrl;
   }
 
-  function openReactionPreview(dataUrl, filename) {
+  function openReactionPreview(reactionOrUrl, filename) {
     // Available anytime except mid-spin (stacks over end-turn gallery)
     if (spinning) return;
-    previewDataUrl = dataUrl;
+
+    if (previewClipPlayer) {
+      previewClipPlayer.destroy();
+      previewClipPlayer = null;
+    }
+
+    const reaction =
+      reactionOrUrl && typeof reactionOrUrl === "object"
+        ? reactionOrUrl
+        : { dataUrl: reactionOrUrl, label: "", bust: false };
+    previewReaction = reaction;
+    previewDataUrl = reactionDisplayUrl(reaction);
     previewFilename = filename || "reaction.jpg";
-    previewImage.src = dataUrl;
+    previewImage.src = previewDataUrl;
+    if (previewSelectStatus) previewSelectStatus.hidden = true;
+
+    const hasClip = Array.isArray(reaction.frames) && reaction.frames.length > 1;
+    if (previewClip) previewClip.hidden = !hasClip;
+    if (previewPip) {
+      if (hasClip) updatePipEl(previewPip, reaction);
+      else {
+        previewPip.hidden = true;
+        previewPip.removeAttribute("src");
+      }
+    }
+    if (hasClip && previewPlay && previewScrub && previewTime) {
+      previewClipPlayer = createClipPlayer({
+        reaction,
+        imgEl: previewImage,
+        playBtn: previewPlay,
+        scrubEl: previewScrub,
+        timeEl: previewTime,
+        pipEl: previewPip,
+        hoverRoot: previewImage.parentElement || previewImage,
+        onFrameChange: () => {
+          // playhead changes don't change the selected thumbnail / download target
+          previewDataUrl = reactionDisplayUrl(reaction);
+        },
+      });
+    }
+
     previewModal.hidden = false;
   }
 
@@ -1256,9 +1800,20 @@
   `;
 
   function closeReactionPreview() {
+    if (previewClipPlayer) {
+      previewClipPlayer.destroy();
+      previewClipPlayer = null;
+    }
+    previewReaction = null;
     previewModal.hidden = true;
     previewImage.removeAttribute("src");
     previewDataUrl = "";
+    if (previewClip) previewClip.hidden = true;
+    if (previewSelectStatus) previewSelectStatus.hidden = true;
+    if (previewPip) {
+      previewPip.hidden = true;
+      previewPip.removeAttribute("src");
+    }
   }
 
   async function bankPoints() {
@@ -1285,6 +1840,9 @@
   }
 
   function closeModal() {
+    modalBody.querySelectorAll("[data-clip-root]").forEach((node) => {
+      node._clipPlayer?.destroy?.();
+    });
     modalRoot.hidden = true;
     modalBody.innerHTML = "";
     modalActions.innerHTML = "";
@@ -1425,6 +1983,11 @@
       return;
     }
 
+    // Tear down any prior clip players attached to gallery items
+    modalBody.querySelectorAll("[data-clip-root]").forEach((node) => {
+      node._clipPlayer?.destroy?.();
+    });
+
     modalBody.innerHTML = "";
     entries.forEach((r, i) => {
       const filename = `${player.name}-reaction-${i + 1}.jpg`;
@@ -1439,38 +2002,37 @@
               ? `<button type="button" class="fav-pick${i === selectedFavoriteIndex ? " is-on" : ""}" aria-label="Pick as favorite">★</button>`
               : ""
           }
-          <img src="${currentUrl}" alt="Reaction ${i + 1}" />
+          <img class="g-playback" src="${currentUrl}" alt="Reaction ${i + 1}" />
+          ${
+            hasClip
+              ? `<img class="clip-pip" data-clip-pip src="${currentUrl}" alt="Selected frame" />`
+              : ""
+          }
           <button type="button" class="dl-circle" aria-label="Download">${DOWNLOAD_ICON_SVG}</button>
         </div>
-        ${
-          hasClip
-            ? `<input type="range" class="g-scrub" min="0" max="${r.frames.length - 1}" value="${r.frameIndex ?? Math.floor(r.frames.length / 2)}" aria-label="Scrub reaction frames" />
-               <span class="g-scrub-label">Scrub for best frame</span>`
-            : ""
-        }
+        ${hasClip ? buildClipPlayerMarkup(r) : ""}
         <div class="g-meta"><strong>${escapeHtml(r.label)}</strong>${r.bust ? "Bust" : r.isPriorFavorite ? "Saved" : "Hit"}</div>
       `;
-      const img = item.querySelector("img");
+      const img = item.querySelector("img.g-playback");
+      const media = item.querySelector(".g-media");
       img.addEventListener("click", () => {
-        openReactionPreview(reactionDisplayUrl(r), filename);
+        openReactionPreview(r, filename);
       });
       if (hasClip) {
-        const scrub = item.querySelector(".g-scrub");
-        scrub.addEventListener("input", () => {
-          const url = setReactionFrame(r, Number(scrub.value));
-          img.src = url;
-          if (multi && selectedFavoriteIndex === i) {
-            // keep favorite pointing at the scrubbed frame
-            player.favorite = url;
-          }
+        const clipRoot = item.querySelector("[data-clip-root]");
+        const clipPlayer = bindClipPlayerIn(clipRoot, r, {
+          hoverRoot: media,
+          onSelect: (url) => {
+            if (multi && selectedFavoriteIndex === i) player.favorite = url;
+          },
         });
+        if (clipRoot) clipRoot._clipPlayer = clipPlayer;
       }
       if (multi) {
         item.querySelector(".fav-pick").addEventListener("click", (e) => {
           e.stopPropagation();
           selectedFavoriteIndex = i;
-          // Selecting a clip as favorite uses its current scrubbed frame
-          if (r.frames?.length) setReactionFrame(r, r.frameIndex ?? 0);
+          if (r.frames?.length) selectReactionFrame(r, ensureSelectedFrameIndex(r));
           renderGalleryBody(player);
           renderGalleryActions(player);
         });
@@ -1587,16 +2149,21 @@
 
   function returnToLobby() {
     gameStarted = false;
-    players = [];
+    multiPlayerMode = false;
+    playersEditor.hidden = true;
+    players = [makeBlankPlayer("Player 1")];
     currentPlayer = 0;
     spinsThisTurn = 0;
     turnOver = false;
     awaitingChoice = false;
     canAct = false;
-    soloStartArmed = false;
-    setSoloWarning(false);
+    renamingActivePlayer = false;
+    if (scoreLabelEdit) {
+      scoreLabelEdit.remove();
+      scoreLabelEdit = null;
+    }
+    scoreLabel.hidden = false;
     setTurnScore(0);
-    scoreLabel.textContent = "Turn";
     scoreboard.classList.remove("is-multi-round");
     roundLabel.hidden = true;
     clearReactionStrip();
@@ -1632,41 +2199,52 @@
   }
 
   function collapsePlayersEditor() {
+    multiPlayerMode = false;
     playersEditor.hidden = true;
     setupPanel.hidden = false;
     setupPanel.style.display = "";
     setupPanel.removeAttribute("aria-hidden");
+    if (!gameStarted) {
+      players = [makeBlankPlayer("Player 1")];
+      currentPlayer = 0;
+      setTurnScore(0);
+      renderPlayerList();
+    } else if (players.length === 0) {
+      ensureActivePlayerSlot();
+    }
     syncSetupButtons();
+    syncTurnHud();
+    renderLeaderboard();
   }
 
   function openPlayersEditor() {
+    multiPlayerMode = true;
+    cancelActivePlayerRename();
+    players = [];
+    currentPlayer = 0;
     playersEditor.hidden = false;
+    setTurnScore(0);
+    renderPlayerList();
+    renderLeaderboard();
     syncSetupButtons();
+    syncTurnHud();
+    unlockLobbyMusic();
     playerNameInput.focus();
   }
 
-  function ensurePlayersForStart() {
-    if (players.length === 0) {
-      players.push({
-        name: "Player 1",
-        banked: 0,
-        reactions: [],
-        favorite: null,
-        done: false,
-        roundsPlayed: 0,
-      });
-      renderPlayerList();
-    }
+  function setPlayMode(multi) {
+    if (gameStarted) return;
+    if (multi === multiPlayerMode && multi === !playersEditor.hidden) return;
+    if (multi) openPlayersEditor();
+    else collapsePlayersEditor();
   }
 
-  function setSoloWarning(visible) {
-    soloWarning.hidden = !visible;
+  function ensurePlayersForStart() {
+    ensureActivePlayerSlot();
   }
 
   function beginGame() {
     ensurePlayersForStart();
-    soloStartArmed = false;
-    setSoloWarning(false);
     totalRounds = readTotalRounds();
     players.forEach((p) => {
       p.banked = 0;
@@ -1681,7 +2259,10 @@
     turnOver = false;
     awaitingChoice = false;
     canAct = true;
-    collapsePlayersEditor();
+    playersEditor.hidden = true;
+    setupPanel.hidden = false;
+    setupPanel.style.display = "";
+    setupPanel.removeAttribute("aria-hidden");
     clearReactionStrip();
     buildBoard();
     setTurnScore(0);
@@ -1689,22 +2270,15 @@
     syncTurnHud();
     renderLeaderboard();
     updateActionButton();
+    unlockLobbyMusic();
   }
 
   function tryBeginFromStartButton() {
-    if (players.length === 0 && !soloStartArmed) {
-      soloStartArmed = true;
-      setSoloWarning(true);
-      return;
-    }
     beginGame();
-    startSpin();
   }
 
   function startGameFromSetup() {
     if (gameStarted) return;
-    soloStartArmed = false;
-    setSoloWarning(false);
     beginGame();
   }
 
@@ -1717,10 +2291,14 @@
     else startSpin();
   }
 
-  btnAddPlayers.addEventListener("click", openPlayersEditor);
+  modeSingleBtn?.addEventListener("click", () => setPlayMode(false));
+  modeMultiBtn?.addEventListener("click", () => setPlayMode(true));
   btnStartFromSetup.addEventListener("click", startGameFromSetup);
   captureVideoToggle?.addEventListener("change", () => {
     captureVideoToggle.setAttribute("aria-checked", captureVideoToggle.checked ? "true" : "false");
+  });
+  lobbyMusicToggle?.addEventListener("change", () => {
+    setLobbyMusicEnabled(lobbyMusicToggle.checked);
   });
 
   roundsTrigger.addEventListener("click", (e) => {
@@ -1748,17 +2326,16 @@
     e.preventDefault();
     const name = playerNameInput.value.trim();
     if (!name) return;
-    soloStartArmed = false;
-    setSoloWarning(false);
-    players.push({ name, banked: 0, reactions: [], favorite: null, done: false, roundsPlayed: 0 });
+    players.push(makeBlankPlayer(name));
     playerNameInput.value = "";
     renderPlayerList();
     syncSetupButtons();
     renderLeaderboard();
+    syncTurnHud();
     playerNameInput.focus();
   });
 
-  btnDonePlayers.addEventListener("click", collapsePlayersEditor);
+  scoreLabel.addEventListener("click", beginActivePlayerRename);
   btnAction.addEventListener("click", onActionClick);
   btnBank.addEventListener("click", () => {
     bankPoints();
@@ -1775,6 +2352,26 @@
   previewDownload.addEventListener("click", (e) => {
     e.stopPropagation();
     if (previewDataUrl) downloadReactionWithBanner(previewDataUrl, previewFilename);
+  });
+  previewSelectFrame?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!previewReaction?.frames?.length) return;
+    previewClipPlayer?.pause();
+    const url =
+      previewClipPlayer?.selectCurrentFrame() ||
+      selectReactionFrame(previewReaction, previewReaction.selectedFrameIndex ?? 0);
+    previewDataUrl = url;
+    previewImage.src = url;
+    updatePipEl(previewPip, previewReaction);
+    syncReactionCardThumbs(previewReaction);
+    if (previewSelectStatus) {
+      previewSelectStatus.hidden = false;
+      previewSelectStatus.textContent = "Frame selected";
+      clearTimeout(previewSelectFrame._statusTimer);
+      previewSelectFrame._statusTimer = setTimeout(() => {
+        previewSelectStatus.hidden = true;
+      }, 1200);
+    }
   });
   reactionsPrevBtn?.addEventListener("click", () => shiftReactionFocus(-1));
   reactionsNextBtn?.addEventListener("click", () => shiftReactionFocus(1));
@@ -1989,11 +2586,22 @@
 
   buildBoard();
   buildBoardLights();
+  ensureActivePlayerSlot();
   syncSetupButtons();
   syncTurnHud();
   renderLeaderboard();
   updateActionButton();
   startCamera();
+  syncLobbyMusic();
+
+  document.addEventListener(
+    "pointerdown",
+    () => {
+      unlockLobbyMusic();
+    },
+    { once: true }
+  );
+  document.addEventListener("visibilitychange", syncLobbyMusic);
 
   async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
