@@ -954,18 +954,21 @@ body {
 }
 
 .leaderboard-row .lb-name {
+  font-family: Bangers, cursive;
   font-weight: 700;
-  font-size: 0.72rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .leaderboard-row .lb-score {
-  font-family: Bangers, cursive;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-weight: 700;
   color: var(--gold-hot);
-  font-size: 0.95rem;
-  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
 }
 
 .board-frame {

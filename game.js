@@ -396,8 +396,8 @@
 
   function formatDialDigits(n) {
     const clamped = Math.max(0, Math.min(99999, Math.round(Number(n) || 0)));
-    const padded = String(clamped).padStart(SCORE_DIAL_DIGITS, "0");
-    return `${padded.slice(0, 2)},${padded.slice(2)}`;
+    // Five digits, no comma on the HUD dials (leaderboard still uses formatValue)
+    return String(clamped).padStart(SCORE_DIAL_DIGITS, "0");
   }
 
   function activeRunningTotal() {
@@ -418,17 +418,12 @@
 
   function ensureScoreDialStructure() {
     if (!scoreDialRow) return;
-    if (scoreDialRow.dataset.sig === "DD,DDD") return;
-    scoreDialRow.dataset.sig = "DD,DDD";
-    // Fixed five-digit register: 00,000
-    scoreDialRow.innerHTML = [
-      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
-      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
-      `<span class="score-dial-sep">,</span>`,
-      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
-      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
-      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`,
-    ].join("");
+    if (scoreDialRow.dataset.sig === "DDDDD") return;
+    scoreDialRow.dataset.sig = "DDDDD";
+    // Fixed five-digit register: 00000 (no comma on dials)
+    scoreDialRow.innerHTML = Array.from({ length: SCORE_DIAL_DIGITS }, () =>
+      `<span class="score-dial"><span class="score-dial-strip">${digitStripHtml()}</span></span>`
+    ).join("");
   }
 
   function paintScoreDials(value) {
