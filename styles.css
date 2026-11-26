@@ -1819,6 +1819,27 @@ body {
   pointer-events: none;
 }
 
+/* Live camera well — above zinger/flash; hidden only during Fire!/bust */
+.camera-reaction-hud {
+  z-index: 55;
+}
+
+.camera-reaction-hud[hidden] {
+  display: none !important;
+}
+
+.camera-well.is-blasting .camera-reaction-hud {
+  visibility: hidden;
+}
+
+.camera-reaction-hud .reaction-hud-spin {
+  font-size: calc(5.8 * var(--cam-u));
+}
+
+.camera-reaction-hud .reaction-hud-stats {
+  font-size: calc(3.6 * var(--cam-u));
+}
+
 .reaction-hud-spin {
   position: absolute;
   top: 8.5%;
@@ -1829,13 +1850,12 @@ body {
   line-height: 1;
   letter-spacing: 0.02em;
   color: var(--gold);
-  text-shadow:
-    0 1px 0 #000,
-    0 0 6px rgba(0, 0, 0, 0.85),
-    1px 1px 0 rgba(0, 0, 0, 0.9);
+  /* drop-shadow follows glyph alpha — text-shadow + overflow:hidden made a square blob */
+  filter:
+    drop-shadow(0 2px 3px rgba(0, 0, 0, 1))
+    drop-shadow(0 4px 12px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 8px 28px rgba(0, 0, 0, 0.85));
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .reaction-hud-spin.is-bust {
@@ -1854,10 +1874,10 @@ body {
   font-size: clamp(0.62rem, 3.4vw, 0.95rem);
   line-height: 1;
   color: var(--gold);
-  text-shadow:
-    0 1px 0 #000,
-    0 0 5px rgba(0, 0, 0, 0.85),
-    1px 1px 0 rgba(0, 0, 0, 0.9);
+  filter:
+    drop-shadow(0 2px 3px rgba(0, 0, 0, 1))
+    drop-shadow(0 4px 12px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 8px 28px rgba(0, 0, 0, 0.85));
   white-space: nowrap;
 }
 

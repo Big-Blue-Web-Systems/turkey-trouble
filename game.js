@@ -56,6 +56,7 @@
   const fireHit = document.getElementById("fire-hit");
   const reactionFlash = document.getElementById("reaction-flash");
   const reactionFlashImage = document.getElementById("reaction-flash-image");
+  const cameraReactionHud = document.getElementById("camera-reaction-hud");
   const turnHud = document.getElementById("turn-hud");
   const scoreEl = document.getElementById("score");
   const scoreDialRow = document.getElementById("score-dial-row");
@@ -2059,6 +2060,13 @@
 
     const reactionLabel = wasTurkey ? "Bust!" : `+${formatValue(awardedValue)}`;
     const reactionHud = snapshotReactionHud(wasTurkey, awardedValue);
+    // Seed live camera HUD now — stays hidden under Fire!/bust, then persists through flash
+    setCameraReactionHud({
+      label: reactionLabel,
+      bust: wasTurkey,
+      score: reactionHud.score,
+      hits: reactionHud.hits,
+    });
 
     if (wasTurkey) {
       // Keep dials on the current total until money_drain during the bust message
@@ -2540,19 +2548,42 @@
     return reaction.label != null || reaction.score != null || reaction.hits != null;
   }
 
-  function reactionOverlayHtml(reaction) {
-    if (!reactionHasHud(reaction)) return "";
+  function reactionHudContentsHtml(reaction) {
     const label = escapeHtml(reaction.label || "");
     const score = formatValue(Math.max(0, Math.round(Number(reaction.score) || 0)));
     const hits = Math.max(0, Math.floor(Number(reaction.hits) || 0));
     const spinClass = reaction.bust ? "reaction-hud-spin is-bust" : "reaction-hud-spin";
-    return `<div class="reaction-hud" aria-hidden="true">
-      <div class="${spinClass}">${label}</div>
+    return `<div class="${spinClass}">${label}</div>
       <div class="reaction-hud-stats">
         <span class="reaction-hud-score">${score}</span>
         <span class="reaction-hud-hits"><span class="lb-hits-icon"></span>${hits}</span>
-      </div>
+      </div>`;
+  }
+
+  function reactionOverlayHtml(reaction) {
+    if (!reactionHasHud(reaction)) return "";
+    return `<div class="reaction-hud" aria-hidden="true">
+      ${reactionHudContentsHtml(reaction)}
     </div>`;
+  }
+
+  /** Live camera HUD — spin result + standings; CSS hides it during Fire!/bust. */
+  function setCameraReactionHud(reaction) {
+    if (!cameraReactionHud) return;
+    if (!reactionHasHud(reaction)) {
+      clearCameraReactionHud();
+      return;
+    }
+    cameraReactionHud.innerHTML = reactionHudContentsHtml(reaction);
+    cameraReactionHud.hidden = false;
+    cameraReactionHud.setAttribute("aria-hidden", "false");
+  }
+
+  function clearCameraReactionHud() {
+    if (!cameraReactionHud) return;
+    cameraReactionHud.hidden = true;
+    cameraReactionHud.setAttribute("aria-hidden", "true");
+    cameraReactionHud.innerHTML = "";
   }
 
   function syncPreviewReactionHud(reaction) {
@@ -2580,7 +2611,12 @@
     octx.globalCompositeOperation = "source-in";
     octx.fillStyle = "#f0b429";
     octx.fillRect(0, 0, size, size);
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.95)";
+    ctx.shadowBlur = Math.max(18, Math.round(size * 1.8));
+    ctx.shadowOffsetY = Math.max(4, Math.round(size * 0.35));
     ctx.drawImage(oc, x, y);
+    ctx.restore();
   }
 
   function strokeFillText(ctx, text, x, y) {
@@ -2607,7 +2643,10 @@
     ctx.textBaseline = "top";
     ctx.lineJoin = "round";
     ctx.lineWidth = stroke;
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.78)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.95)";
+    ctx.shadowBlur = Math.max(22, Math.round(w * 0.045));
+    ctx.shadowOffsetY = Math.max(6, Math.round(w * 0.012));
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
@@ -3428,6 +3467,7 @@
 
   function prepareNextTurnBoard() {
     clearReactionStrip();
+    clearCameraReactionHud();
     hideBanner();
     turnOver = false;
     awaitingChoice = false;
@@ -3872,6 +3912,7 @@
     scoreboard.classList.remove("is-multi-round");
     roundLabel.hidden = true;
     clearReactionStrip();
+    clearCameraReactionHud();
     hideBanner();
     setLit(-1);
     buildBoard();
@@ -3897,6 +3938,7 @@
     awaitingChoice = false;
     canAct = true;
     clearReactionStrip();
+    clearCameraReactionHud();
     hideBanner();
     buildBoard();
     setTurnScore(0);
