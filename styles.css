@@ -925,7 +925,7 @@ body {
 .leaderboard-row {
   display: grid;
   grid-template-columns: 1.1rem minmax(0, 1fr);
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   column-gap: 0.3rem;
   row-gap: 0.05rem;
   align-items: center;
@@ -945,7 +945,7 @@ body {
 }
 
 .leaderboard-row .lb-rank {
-  grid-row: 1 / 3;
+  grid-row: 1 / 4;
   font-family: Bangers, cursive;
   color: var(--muted);
   font-size: 0.9rem;
@@ -971,6 +971,28 @@ body {
   letter-spacing: 0.02em;
 }
 
+.leaderboard-row .lb-hits {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28em;
+  color: var(--muted);
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.leaderboard-row .lb-hits-icon {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  flex-shrink: 0;
+  background-color: var(--gold);
+  -webkit-mask: url("assets/crosshair-hit.png") center / contain no-repeat;
+  mask: url("assets/crosshair-hit.png") center / contain no-repeat;
+}
+
 .board-frame {
   grid-column: 2;
   grid-row: 1;
@@ -983,6 +1005,54 @@ body {
   margin-bottom: var(--frame-margin-bottom);
   padding: var(--board-pad);
   justify-self: start;
+}
+
+.board-cheat-overlay {
+  position: absolute;
+  inset: var(--board-pad);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(8, 4, 2, 0.72);
+  border-radius: 12px;
+  pointer-events: none;
+  animation: cheat-in 280ms ease-out;
+}
+
+.board-cheat-overlay.is-out {
+  animation: cheat-out 280ms ease-in forwards;
+}
+
+.board-cheat-msg {
+  margin: 0;
+  font-family: Bangers, cursive;
+  font-size: clamp(1.8rem, 6vw, 3rem);
+  letter-spacing: 0.1em;
+  color: var(--gold-hot);
+  text-align: center;
+  text-shadow:
+    0 3px 0 #6b2e0a,
+    0 0 28px rgba(240, 180, 41, 0.45);
+}
+
+@keyframes cheat-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cheat-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 .board-lights {
@@ -1099,6 +1169,10 @@ body {
 .tile-face-front {
   background: linear-gradient(160deg, var(--tile-top, #5c3418), var(--tile-bot, #3a2414));
   color: var(--tile-ink, #fff4e0);
+  transition:
+    background 0.55s ease,
+    border-color 0.55s ease,
+    color 0.55s ease;
 }
 
 .tile-face-back {
@@ -1164,6 +1238,22 @@ body {
   --tile-bot: #7a4010;
   --tile-edge: #e09848;
   --tile-ink: #fff4e4;
+}
+
+/* Soft harvest red — warmer/duller than turkey-tile scarlet */
+.tile.tone-crimson {
+  --tile-top: #b84838;
+  --tile-bot: #7a2818;
+  --tile-edge: #d07058;
+  --tile-ink: #fff0e8;
+}
+
+/* Fall foliage green */
+.tile.tone-moss {
+  --tile-top: #6a8a38;
+  --tile-bot: #3a5218;
+  --tile-edge: #8ab050;
+  --tile-ink: #f4ffe8;
 }
 
 .tile .label {
@@ -2212,6 +2302,45 @@ body {
   margin: 0.25rem 0 0.85rem;
   color: var(--muted);
   font-size: 0.95rem;
+}
+
+.modal-subtitle.is-tiebreak-cycle {
+  min-height: 2.8em;
+  color: var(--cream, #f4e6c8);
+  font-size: clamp(0.95rem, 2.4vw, 1.1rem);
+  line-height: 1.45;
+  text-align: center;
+  max-width: 36rem;
+  margin-inline: auto;
+}
+
+.tiebreak-compare {
+  margin: 0.15rem 0 0;
+  max-width: 28rem;
+  text-align: center;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.tiebreak-dual-meta {
+  margin: 0;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.winner-photo-empty {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  border: 3px dashed #6a4020;
+  background: #1a0c08;
 }
 
 .fav-change-hint {

@@ -136,7 +136,7 @@
 
   /** @type {{ value: number, isTurkey: boolean, el: HTMLButtonElement }[]} */
   let tiles = [];
-  /** @type {{ name: string, banked: number, reactions: {dataUrl:string,frames?:string[],frameIndex?:number,isClip?:boolean,label:string,bust:boolean}[], favorite: string|null, done: boolean, roundsPlayed: number }[]} */
+  /** @type {{ name: string, banked: number, hits: number, reactions: {dataUrl:string,frames?:string[],frameIndex?:number,isClip?:boolean,label:string,bust:boolean}[], favorite: string|null, done: boolean, roundsPlayed: number }[]} */
   let players = [];
   let currentPlayer = 0;
   let totalRounds = 1;
@@ -316,9 +316,64 @@
     "tone-maple",
     "tone-wheat",
     "tone-cider",
+    "tone-crimson",
+    "tone-moss",
   ];
 
+  /** @type {ReturnType<typeof setTimeout>[]} */
+  let tileToneTimers = [];
+
+  function stopTileToneTwinkle() {
+    tileToneTimers.forEach((t) => clearTimeout(t));
+    tileToneTimers = [];
+  }
+
+  function tileToneTwinkleAllowed() {
+    // Same vibe as the bulbs — idle shimmer between spins, not mid-action
+    return (
+      !spinning &&
+      !tileRevealInProgress &&
+      !document.querySelector(".board-cheat-overlay")
+    );
+  }
+
+  function applyRandomTileTone(tile) {
+    if (!tile?.el || tile.isTurkey) return;
+    const current = TILE_TONES.find((t) => tile.el.classList.contains(t));
+    let next = TILE_TONES[Math.floor(Math.random() * TILE_TONES.length)];
+    if (TILE_TONES.length > 1) {
+      let guard = 0;
+      while (next === current && guard < 8) {
+        next = TILE_TONES[Math.floor(Math.random() * TILE_TONES.length)];
+        guard += 1;
+      }
+    }
+    TILE_TONES.forEach((t) => tile.el.classList.remove(t));
+    tile.el.classList.add(next);
+  }
+
+  function startTileToneTwinkle() {
+    stopTileToneTwinkle();
+    if (!tiles.length) return;
+
+    const scheduleShift = (tileIndex) => {
+      // ~0.75× bulb cadence (slower shimmer on prize faces)
+      const delay = (700 + Math.random() * 1600) / 0.75;
+      const timer = setTimeout(() => {
+        if (!tiles[tileIndex]) return;
+        if (tileToneTwinkleAllowed()) {
+          applyRandomTileTone(tiles[tileIndex]);
+        }
+        scheduleShift(tileIndex);
+      }, delay);
+      tileToneTimers.push(timer);
+    };
+
+    tiles.forEach((_, i) => scheduleShift(i));
+  }
+
   function buildBoard() {
+    stopTileToneTwinkle();
     board.querySelectorAll(".tile").forEach((el) => el.remove());
 
     tiles = PRIZE_VALUES.map((value, i) => {
@@ -343,6 +398,7 @@
       board.insertBefore(el, cameraWell);
       return { value, isTurkey: false, el };
     });
+    startTileToneTwinkle();
   }
 
   function waitMs(ms) {
@@ -386,6 +442,130 @@
     tileRevealInProgress = false;
     syncLobbyMusic();
   }
+
+  function isBoardFullyCleared() {
+    return tiles.length > 0 && tiles.every((t) => t.isTurkey);
+  }
+
+  function restorePrizeTile(tile) {
+    tile.isTurkey = false;
+    tile.el.classList.remove("is-turkey", "is-flipped", "is-awarded");
+    tile.el.setAttribute("aria-label", formatValue(tile.value));
+    const front = tile.el.querySelector(".tile-face-front");
+    if (front && !front.querySelector(".label")) {
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = formatValue(tile.value);
+      front.appendChild(label);
+    }
+  }
+
+  function tileBoardSide(index) {
+    const slot = LAYOUT[index] || { row: 0, col: 0 };
+    if (slot.row === 1) return "top";
+    if (slot.row === 4) return "bottom";
+    if (slot.col === 4) return "right";
+    if (slot.col === 1) return "left";
+    return "other";
+  }
+
+  function shuffleInPlace(arr) {
+    for (let i = arr.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = arr[i];
+      arr[i] = arr[j];
+      arr[j] = tmp;
+    }
+    return arr;
+  }
+
+  /**
+   * Pull up to 4 still-flipped tiles: prefer one from each board side,
+   * then fill any leftover slots at random (never a tight clump by index).
+   */
+  function pickScatteredUnflipBatch(remaining, batchSize = 4) {
+    if (!remaining.length) return [];
+
+    const bySide = { top: [], right: [], bottom: [], left: [], other: [] };
+    remaining.forEach((entry) => {
+      bySide[tileBoardSide(entry.index)].push(entry);
+    });
+
+    const batch = [];
+    const takeFrom = (list) => {
+      if (!list.length || batch.length >= batchSize) return;
+      const pickAt = Math.floor(Math.random() * list.length);
+      batch.push(list.splice(pickAt, 1)[0]);
+    };
+
+    // One from each side first (sides shuffled so which side leads varies)
+    shuffleInPlace(["top", "right", "bottom", "left"]).forEach((side) => {
+      takeFrom(bySide[side]);
+    });
+
+    // Fill remaining slots from whatever is left
+    const leftovers = remaining.filter((entry) => !batch.includes(entry));
+    shuffleInPlace(leftovers);
+    while (batch.length < batchSize && leftovers.length) {
+      batch.push(leftovers.shift());
+    }
+
+    return batch;
+  }
+
+  /** Three quick card-flip hits under a batch of tile unflips. */
+  async function playTripleCardFlip() {
+    playCardFlipSfxLayered();
+    await waitMs(95);
+    playCardFlipSfxLayered();
+    await waitMs(95);
+    playCardFlipSfxLayered();
+  }
+
+  /** Full clear without a bust — accuse, then unflip 4 scattered tiles at a time with triple flips. */
+  async function showBoardClearedCheatMoment() {
+    const frame = board.closest(".board-frame") || board;
+    const overlay = document.createElement("div");
+    overlay.className = "board-cheat-overlay";
+    overlay.setAttribute("role", "status");
+    overlay.innerHTML = `<p class="board-cheat-msg">Are you cheating?</p>`;
+    frame.appendChild(overlay);
+    await waitMs(3000);
+
+    const remaining = tiles
+      .map((tile, index) => ({ tile, index }))
+      .filter(({ tile }) => tile.isTurkey);
+
+    while (remaining.length) {
+      const batch = pickScatteredUnflipBatch(remaining, 4);
+      batch.forEach((entry) => {
+        const at = remaining.indexOf(entry);
+        if (at >= 0) remaining.splice(at, 1);
+      });
+      const sfx = playTripleCardFlip();
+      batch.forEach(({ tile }) => restorePrizeTile(tile));
+      await Promise.all([sfx, waitMs(TILE_FLIP_MS + 120)]);
+    }
+
+    overlay.classList.add("is-out");
+    await waitMs(280);
+    overlay.remove();
+  }
+
+  /** Dev helper — board full of turkeys, then run the cheat / unflip sequence. */
+  window.__demoBoardCheatClear = async function demoBoardCheatClear() {
+    if (!tiles.length) buildBoard();
+    hideBanner();
+    clearTileRevealClasses();
+    tiles.forEach((tile) => {
+      tile.isTurkey = true;
+      tile.el.classList.add("is-turkey", "is-flipped");
+      tile.el.setAttribute("aria-label", "Turkey");
+      tile.el.querySelector(".label")?.remove();
+    });
+    await waitMs(600);
+    await showBoardClearedCheatMoment();
+  };
 
   /** Always five dials: $00,000 … $99,999 */
   const SCORE_DIAL_DIGITS = 5;
@@ -553,6 +733,10 @@
     const fromTotal = activeRunningTotal();
     turnScore += add;
     const toTotal = activeRunningTotal();
+    // Hit count ticks up with the cash dial (not at Fire! land)
+    if (players[currentPlayer]) {
+      players[currentPlayer].hits = (players[currentPlayer].hits || 0) + 1;
+    }
 
     scoreDialAnimating = true;
     syncLobbyMusic();
@@ -911,6 +1095,7 @@
     return {
       name,
       banked: 0,
+      hits: 0,
       reactions: [],
       favorite: null,
       done: false,
@@ -1043,12 +1228,16 @@
 
     leaderboardList.innerHTML = ranked
       .map(
-        ({ p, index, total }, rank) => `
+        ({ p, index, total }, rank) => {
+          const hits = Math.max(0, p.hits || 0);
+          return `
       <li class="leaderboard-row${index === currentPlayer && !p.done ? " is-active" : ""}${p.done ? " is-done" : ""}">
         <span class="lb-rank">${rank + 1}</span>
         <span class="lb-name">${escapeHtml(p.name)}</span>
         <span class="lb-score">${formatValue(total)}</span>
-      </li>`
+        <span class="lb-hits"><span class="lb-hits-icon" aria-hidden="true"></span>${hits} ${hits === 1 ? "Hit" : "Hits"}</span>
+      </li>`;
+        }
       )
       .join("");
   }
@@ -1350,6 +1539,27 @@
       if (playAttempt) playAttempt.catch(() => {});
     } catch (_) {
       /* ignore playback errors */
+    }
+    syncLobbyMusic();
+  }
+
+  /** Overlapping flip hit — clones so rapid triples don't cut each other off. */
+  function playCardFlipSfxLayered() {
+    if (!effectsAllowed()) return;
+    try {
+      const layer = cardFlipSfx.cloneNode(true);
+      layer.volume = cardFlipSfx.volume;
+      const playAttempt = layer.play();
+      if (playAttempt) playAttempt.catch(() => {});
+      layer.addEventListener(
+        "ended",
+        () => {
+          layer.remove();
+        },
+        { once: true }
+      );
+    } catch (_) {
+      playCardFlipSfx();
     }
     syncLobbyMusic();
   }
@@ -1679,7 +1889,7 @@
     }
 
     scheduleFireHitAmount(formatValue(awardedValue));
-    // Hold the running total until after zinger / reaction flash, then cha-ching dial-up
+    // Hold the running total (+ hit count) until after zinger / reaction flash, then cha-ching dial-up
     hideBanner();
     playSting("win");
 
@@ -1940,6 +2150,11 @@
     if (turnOver) return;
     await playPrizeReveal(landed);
     if (turnOver) return;
+    // Hit every tile without a turkey → accuse, then flip the board back
+    if (isBoardFullyCleared()) {
+      await showBoardClearedCheatMoment();
+      if (turnOver) return;
+    }
     // Zinger; then cheer spike @ 0.5× only if mic had a real peak
     await flashReactionPhoto(latest, { rate: 0.5, trimToSpike: true, kind: "prize" });
     if (turnOver) return;
@@ -3047,49 +3262,7 @@
     return player.favorite || favMap[player.name] || player.reactions.at(-1)?.dataUrl || null;
   }
 
-  function showWinner() {
-    // Multiplayer only — solo ends on the results gallery
-    const topScore = Math.max(...players.map((p) => p.banked));
-    const winners = players.filter((p) => p.banked === topScore);
-    const favMap = loadFavoritesMap();
-
-    modalBody.classList.add("is-winner");
-    modalActions.innerHTML = "";
-
-    if (topScore <= 0) {
-      modalTitle.textContent = "Turkey Tom Wins";
-      modalSubtitle.textContent = "Nobody bagged any cash";
-      modalBody.innerHTML = `
-        <img class="winner-photo winner-photo-tom" src="assets/turkey-tile.png" alt="Turkey Tom" />
-      `;
-    } else if (winners.length > 1) {
-      modalTitle.textContent = "It's a tie!";
-      modalSubtitle.textContent = `${winners.map((w) => w.name).join(" & ")} — ${formatValue(topScore)}`;
-      const photos = winners
-        .map((w) => {
-          const photo = winnerPhotoFor(w, favMap);
-          if (!photo) {
-            return `<div class="winner-tie-slot"><p class="modal-subtitle">${escapeHtml(w.name)}</p></div>`;
-          }
-          return `
-            <figure class="winner-tie-slot">
-              <img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(w.name)}" />
-              <figcaption class="winner-caption">${escapeHtml(w.name)}</figcaption>
-            </figure>
-          `;
-        })
-        .join("");
-      modalBody.innerHTML = `<div class="winner-photos">${photos}</div>`;
-    } else {
-      const winner = winners[0];
-      const photo = winnerPhotoFor(winner, favMap);
-      modalTitle.textContent = `${winner.name} wins!`;
-      modalSubtitle.textContent = formatValue(topScore);
-      modalBody.innerHTML = photo
-        ? `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(winner.name)}" />`
-        : `<p class="modal-subtitle">No favorite photo saved.</p>`;
-    }
-
+  function appendEndGameButton() {
     const again = document.createElement("button");
     again.type = "button";
     again.className = "btn btn-play-again";
@@ -3099,10 +3272,164 @@
       returnToLobby();
     });
     modalActions.appendChild(again);
-    modalRoot.hidden = false;
-    if (topScore <= 0) playNoWinnerComedy();
-    else playPodiumApplause();
   }
+
+  function shotsLabel(n) {
+    const count = Math.max(0, n || 0);
+    return `${count} ${count === 1 ? "shot" : "shots"}`;
+  }
+
+  /**
+   * Dollar-amount tie → fewest hits wins. Hits also tied → dual winners.
+   * Title stays put while subtitle cycles, then the reveal lands.
+   */
+  async function runCashTiebreaker(tiedPlayers, topScore, favMap) {
+    const beat = (ms) =>
+      waitMs(window.__tiebreakFast ? Math.max(350, Math.round(ms * 0.18)) : ms);
+
+    modalTitle.classList.remove("is-fav-prompt");
+    modalTitle.textContent = "THIS TIE MUST BE BROKEN";
+    modalSubtitle.classList.add("is-tiebreak-cycle");
+    modalSubtitle.textContent = `${tiedPlayers.map((p) => p.name).join(" & ")} — ${formatValue(topScore)}`;
+    modalBody.innerHTML = "";
+    modalActions.innerHTML = "";
+    modalRoot.hidden = false;
+    playPodiumApplause();
+
+    // Each cycling line holds ~3s before the next
+    await beat(3000);
+    modalSubtitle.textContent =
+      "The tiebreaker is awarded to the hunter who achieved this score in the fewest number of shots";
+    await beat(3000);
+    modalSubtitle.textContent = "And the winner is....";
+    await beat(3000);
+
+    const byShots = [...tiedPlayers].sort(
+      (a, b) => (a.hits || 0) - (b.hits || 0) || a.name.localeCompare(b.name)
+    );
+    const fewest = byShots[0].hits || 0;
+    const shotWinners = byShots.filter((p) => (p.hits || 0) === fewest);
+
+    modalSubtitle.classList.remove("is-tiebreak-cycle");
+
+    if (shotWinners.length === 1) {
+      const winner = shotWinners[0];
+      const rivals = tiedPlayers.filter((p) => p !== winner);
+      const photo = winnerPhotoFor(winner, favMap);
+      modalTitle.textContent = "THIS TIE MUST BE BROKEN";
+      modalSubtitle.textContent = `${winner.name}!`;
+      modalBody.innerHTML = `
+        ${
+          photo
+            ? `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(winner.name)}" />`
+            : `<p class="modal-subtitle">No favorite photo saved.</p>`
+        }
+        <p class="tiebreak-compare">
+          ${escapeHtml(winner.name)} sealed it in ${shotsLabel(winner.hits)}
+          ${rivals
+            .map(
+              (r) =>
+                ` · ${escapeHtml(r.name)} needed ${shotsLabel(r.hits)}`
+            )
+            .join("")}
+        </p>
+      `;
+    } else {
+      modalTitle.textContent = "WHAT? TIED AGAIN!";
+      modalSubtitle.textContent = "I'm out of ideas at this point. You're both winners!";
+      const slots = shotWinners
+        .map((w) => {
+          const photo = winnerPhotoFor(w, favMap);
+          return `
+            <figure class="winner-tie-slot">
+              ${
+                photo
+                  ? `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(w.name)}" />`
+                  : `<div class="winner-photo winner-photo-empty" aria-hidden="true"></div>`
+              }
+              <figcaption class="winner-caption">${escapeHtml(w.name)}</figcaption>
+              <p class="tiebreak-dual-meta">${formatValue(topScore)} · ${shotsLabel(w.hits)}</p>
+            </figure>
+          `;
+        })
+        .join("");
+      modalBody.innerHTML = `<div class="winner-photos">${slots}</div>`;
+    }
+
+    appendEndGameButton();
+  }
+
+  async function showWinner() {
+    // Multiplayer only — solo ends on the results gallery
+    const topScore = Math.max(...players.map((p) => p.banked));
+    const winners = players.filter((p) => p.banked === topScore);
+    const favMap = loadFavoritesMap();
+
+    modalBody.classList.add("is-winner");
+    modalActions.innerHTML = "";
+    modalSubtitle.classList.remove("is-tiebreak-cycle");
+
+    if (topScore <= 0) {
+      modalTitle.textContent = "Turkey Tom Wins";
+      modalSubtitle.textContent = "Nobody bagged any cash";
+      modalBody.innerHTML = `
+        <img class="winner-photo winner-photo-tom" src="assets/turkey-tile.png" alt="Turkey Tom" />
+      `;
+      appendEndGameButton();
+      modalRoot.hidden = false;
+      playNoWinnerComedy();
+      return;
+    }
+
+    if (winners.length > 1) {
+      await runCashTiebreaker(winners, topScore, favMap);
+      return;
+    }
+
+    const winner = winners[0];
+    const photo = winnerPhotoFor(winner, favMap);
+    modalTitle.textContent = `${winner.name} wins!`;
+    modalSubtitle.textContent = formatValue(topScore);
+    modalBody.innerHTML = photo
+      ? `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(winner.name)}" />`
+      : `<p class="modal-subtitle">No favorite photo saved.</p>`;
+    appendEndGameButton();
+    modalRoot.hidden = false;
+    playPodiumApplause();
+  }
+
+  /** Dev helper — preview both tie endings without playing a full match. */
+  window.__demoTieEndings = async function demoTieEndings(mode) {
+    const placeholder = (label, hue) => {
+      const c = document.createElement("canvas");
+      c.width = 480;
+      c.height = 360;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = `hsl(${hue} 42% 28%)`;
+      ctx.fillRect(0, 0, 480, 360);
+      ctx.fillStyle = "#f0b429";
+      ctx.font = "bold 42px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(label, 240, 190);
+      return c.toDataURL("image/jpeg", 0.85);
+    };
+
+    gameStarted = true;
+    if (mode === "shots") {
+      players = [
+        { ...makeBlankPlayer("Austin"), banked: 12500, hits: 3, favorite: placeholder("Austin", 28) },
+        { ...makeBlankPlayer("Sam"), banked: 12500, hits: 7, favorite: placeholder("Sam", 200) },
+      ];
+    } else {
+      players = [
+        { ...makeBlankPlayer("Austin"), banked: 12500, hits: 4, favorite: placeholder("Austin", 28) },
+        { ...makeBlankPlayer("Sam"), banked: 12500, hits: 4, favorite: placeholder("Sam", 200) },
+      ];
+    }
+    currentPlayer = 0;
+    renderLeaderboard();
+    await showWinner();
+  };
 
   function returnToLobby() {
     gameStarted = false;
@@ -3137,6 +3464,7 @@
   function resetForNewGame() {
     players.forEach((p) => {
       p.banked = 0;
+      p.hits = 0;
       p.reactions = [];
       p.favorite = null;
       p.done = false;
@@ -3205,6 +3533,7 @@
     totalRounds = readTotalRounds();
     players.forEach((p) => {
       p.banked = 0;
+      p.hits = 0;
       p.reactions = [];
       p.favorite = null;
       p.done = false;
