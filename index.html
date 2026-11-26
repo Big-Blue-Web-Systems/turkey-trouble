@@ -13,17 +13,28 @@
   <div class="stage">
     <header class="top-bar">
       <div class="brand-block">
-        <h1 class="brand">Turkey Trouble</h1>
-        <p class="tagline">Press your luck… or bank the bird</p>
-      </div>
-      <div class="scoreboard">
-        <span class="score-label" id="score-label">Turn</span>
-        <span id="score" class="score-value">0</span>
+        <h1 class="brand">
+          <img
+            class="brand-logo"
+            src="assets/turkey-trouble-logo.png"
+            alt="Turkey Trouble"
+            width="640"
+            height="200"
+          />
+        </h1>
+        <p class="tagline">Test your aim and bag the cash, but don't shoot at Turkey Tom....</p>
       </div>
     </header>
 
     <section id="setup-panel" class="setup-panel">
-      <button id="btn-add-players" class="btn btn-players" type="button">Add Players</button>
+      <div class="setup-actions">
+        <button id="btn-add-players" class="btn btn-players" type="button">Add Players</button>
+        <button id="btn-done-players" class="btn btn-start-game" type="button" hidden>Done</button>
+        <div class="scoreboard">
+          <span class="score-label" id="score-label">Turn</span>
+          <span id="score" class="score-value">0</span>
+        </div>
+      </div>
       <div id="players-editor" class="players-editor" hidden>
         <form id="add-player-form" class="add-player-form">
           <input id="player-name-input" type="text" maxlength="24" placeholder="Player name" autocomplete="off" />
@@ -31,50 +42,43 @@
         </form>
         <p class="drag-hint">Drag to set turn order</p>
         <ul id="player-list" class="player-list" aria-label="Player order"></ul>
-        <button id="btn-start-game" class="btn btn-start-game" type="button" disabled>Start Game</button>
       </div>
     </section>
 
-    <main class="board" id="board" aria-label="Prize board">
-      <div class="camera-well">
-        <video id="camera" autoplay playsinline muted></video>
-        <canvas id="capture" hidden></canvas>
-        <div id="festive-overlay" class="festive-overlay" aria-hidden="true"></div>
-        <div id="turkey-blast" class="turkey-blast" hidden aria-hidden="true">
-          <div class="turkey-blast-dim"></div>
-          <div class="turkey-actor" id="turkey-actor">
-            <svg viewBox="0 0 220 200" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <ellipse cx="110" cy="150" rx="55" ry="40" fill="#c45c26"/>
-              <ellipse cx="110" cy="100" rx="42" ry="38" fill="#e87a1e"/>
-              <circle cx="110" cy="58" r="28" fill="#f0b429"/>
-              <circle cx="100" cy="54" r="5" fill="#1a1008"/>
-              <circle cx="120" cy="54" r="5" fill="#1a1008"/>
-              <path d="M110 62 l6 10 -12 0 z" fill="#e85a45"/>
-              <path d="M78 48 Q60 20 85 35 Q95 10 110 40" fill="#a32d1c"/>
-              <path d="M142 48 Q160 20 135 35 Q125 10 110 40" fill="#c45c26"/>
-              <path d="M85 145 L70 190 L95 175 Z" fill="#8a5a2b"/>
-              <path d="M135 145 L150 190 L125 175 Z" fill="#8a5a2b"/>
-              <g class="shotgun" transform="translate(130,95) rotate(-12)">
-                <rect x="0" y="8" width="70" height="10" rx="2" fill="#3a2a1a"/>
-                <rect x="55" y="5" width="28" height="16" rx="2" fill="#2a1a10"/>
-                <rect x="8" y="18" width="18" height="22" rx="2" fill="#5a3a20"/>
-                <circle class="muzzle-flash" cx="90" cy="13" r="14" fill="#ffe566" opacity="0"/>
-              </g>
-              <g class="wing-point" transform="translate(145,110)">
-                <ellipse cx="0" cy="0" rx="18" ry="10" fill="#c45c26" transform="rotate(-30)"/>
-              </g>
-            </svg>
-            <div class="bang" id="turkey-bang">BANG!</div>
+    <div class="board-frame">
+      <div id="board-lights" class="board-lights" aria-hidden="true"></div>
+      <main class="board" id="board" aria-label="Prize board">
+        <div class="camera-well">
+          <video id="camera" autoplay playsinline muted></video>
+          <canvas id="capture" hidden></canvas>
+          <img
+            class="camera-border"
+            src="assets/camera-border.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <div id="turkey-blast" class="turkey-blast" hidden aria-hidden="true">
+            <video
+              id="bust-video"
+              class="bust-video"
+              src="assets/turkey-trouble-bust.mp4"
+              playsinline
+              muted
+              preload="metadata"
+            ></video>
           </div>
+          <div id="camera-status" class="camera-status">Starting camera…</div>
+          <div id="result-banner" class="result-banner" hidden></div>
         </div>
-        <div id="camera-status" class="camera-status">Starting camera…</div>
-        <div id="result-banner" class="result-banner" hidden></div>
-      </div>
-    </main>
+      </main>
+    </div>
 
-    <section id="controls" class="controls" hidden>
-      <button id="btn-action" class="btn btn-action is-start" type="button">Start</button>
-      <button id="btn-bank" class="btn btn-bank is-slot-hidden" type="button" disabled>Bank Points</button>
+    <section id="controls" class="controls">
+      <button id="btn-action" class="btn btn-action is-start" type="button">Pull!</button>
+      <button id="btn-bank" class="btn btn-bank is-slot-hidden" type="button" disabled>Bag Cash</button>
+      <p id="solo-warning" class="solo-warning" hidden>
+        You're about to start a single player game. Press <strong class="solo-pull">Pull!</strong> again to begin.
+      </p>
     </section>
 
     <section class="reactions" aria-label="Reaction photos">
@@ -95,6 +99,17 @@
       <p id="modal-subtitle" class="modal-subtitle"></p>
       <div id="modal-body" class="modal-body"></div>
       <div id="modal-actions" class="modal-actions"></div>
+    </div>
+  </div>
+
+  <div id="preview-modal" class="preview-modal" hidden>
+    <div class="preview-backdrop" id="preview-backdrop"></div>
+    <div class="preview-dialog" role="dialog" aria-modal="true" aria-label="Reaction preview">
+      <button id="preview-close" class="preview-close" type="button" aria-label="Close preview">×</button>
+      <img id="preview-image" class="preview-image" alt="Reaction preview" />
+      <button id="preview-download" class="btn btn-preview-download" type="button" aria-label="Download reaction">
+        ⬇ Download
+      </button>
     </div>
   </div>
 

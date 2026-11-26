@@ -23,56 +23,17 @@
   const SPIN_MIN_MS = 70;
   const SPIN_MAX_MS = 140;
   const REACTION_DELAY_MS = 750;
-  const TURKEY_ANIM_MS = 2200;
   const FAVORITES_KEY = "turkeyTroubleFavorites";
 
-  const LEAF_SVG = encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-      <path fill="#c45c26" d="M32 4c8 10 22 14 26 28-10 2-18 10-22 22-4-12-14-20-26-22C14 18 24 14 32 4z"/>
-      <path fill="#8a3d12" d="M32 10c0 18-2 30-4 46" stroke="#6b2e0a" stroke-width="2" fill="none"/>
-      <path fill="#e87a1e" d="M20 22c6 4 10 10 12 18-8-2-14-8-18-14 2-2 4-3 6-4z"/>
-      <path fill="#6b8f3c" d="M44 20c-4 6-6 12-6 20 8-4 12-10 14-16-2-2-5-3-8-4z"/>
-    </svg>
-  `);
-
-  const LEAF2_SVG = encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-      <path fill="#6b8f3c" d="M32 6c10 8 20 20 18 34-12-2-20 6-26 18C18 44 8 34 10 20 18 14 26 10 32 6z"/>
-      <path d="M30 12c2 14 2 28 0 42" stroke="#3d5c24" stroke-width="2.5" fill="none"/>
-      <path fill="#c6a832" d="M18 28c6 2 10 8 12 14-6 0-12-4-16-10 1-2 2-3 4-4z"/>
-    </svg>
-  `);
-
-  const CORNUCOPIA_SVG = encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
-      <path fill="#b87333" d="M8 48c8-22 28-36 52-38 10 18 8 34-2 48-18 4-34 2-50-10z"/>
-      <path fill="#8a5a2b" d="M58 12c16 4 30 16 36 32-12 8-24 10-38 6 4-12 4-26 2-38z"/>
-      <circle cx="78" cy="22" r="7" fill="#e85a45"/>
-      <circle cx="92" cy="30" r="6" fill="#f0b429"/>
-      <circle cx="84" cy="36" r="5" fill="#6b8f3c"/>
-      <circle cx="70" cy="28" r="5" fill="#c45c26"/>
-      <ellipse cx="98" cy="40" rx="5" ry="7" fill="#8bc34a"/>
-      <path fill="#f5d76e" d="M88 18l3 8 8 2-6 5 2 8-7-4-7 4 2-8-6-5 8-2z"/>
-    </svg>
-  `);
-
-  const DECORATIONS = [
-    { src: LEAF_SVG, x: 2, y: 2, w: 22, rot: -28 },
-    { src: LEAF2_SVG, x: 78, y: 0, w: 20, rot: 18 },
-    { src: LEAF_SVG, x: 70, y: 78, w: 18, rot: 140 },
-    { src: LEAF2_SVG, x: 8, y: 72, w: 16, rot: -150 },
-    { src: CORNUCOPIA_SVG, x: 0, y: 55, w: 34, rot: -8 },
-    { src: CORNUCOPIA_SVG, x: 68, y: 52, w: 32, rot: 8, flip: true },
-  ];
-
   const board = document.getElementById("board");
+  const boardLights = document.getElementById("board-lights");
   const camera = document.getElementById("camera");
   const captureCanvas = document.getElementById("capture");
   const cameraStatus = document.getElementById("camera-status");
   const cameraWell = board.querySelector(".camera-well");
   const resultBanner = document.getElementById("result-banner");
-  const festiveOverlay = document.getElementById("festive-overlay");
   const turkeyBlast = document.getElementById("turkey-blast");
+  const bustVideo = document.getElementById("bust-video");
   const scoreEl = document.getElementById("score");
   const scoreLabel = document.getElementById("score-label");
   const reactionStrip = document.getElementById("reaction-strip");
@@ -85,7 +46,8 @@
   const addPlayerForm = document.getElementById("add-player-form");
   const playerNameInput = document.getElementById("player-name-input");
   const playerList = document.getElementById("player-list");
-  const btnStartGame = document.getElementById("btn-start-game");
+  const btnDonePlayers = document.getElementById("btn-done-players");
+  const soloWarning = document.getElementById("solo-warning");
   const leaderboard = document.getElementById("leaderboard");
   const leaderboardList = document.getElementById("leaderboard-list");
   const modalRoot = document.getElementById("modal-root");
@@ -93,6 +55,13 @@
   const modalSubtitle = document.getElementById("modal-subtitle");
   const modalBody = document.getElementById("modal-body");
   const modalActions = document.getElementById("modal-actions");
+  const previewModal = document.getElementById("preview-modal");
+  const previewBackdrop = document.getElementById("preview-backdrop");
+  const previewImage = document.getElementById("preview-image");
+  const previewDownload = document.getElementById("preview-download");
+  const previewClose = document.getElementById("preview-close");
+  let previewDataUrl = "";
+  let previewFilename = "reaction.jpg";
 
   /** @type {{ value: number, isTurkey: boolean, el: HTMLButtonElement }[]} */
   let tiles = [];
@@ -112,31 +81,164 @@
   /** @type {Promise<void>|null} */
   let reactionCapturePromise = null;
   let audioCtx = null;
-  let musicNodes = null;
+  let gobbleGain = null;
   let dragFromIndex = null;
   let selectedFavoriteIndex = -1;
   let endTurnPlayerIndex = -1;
+  let soloStartArmed = false;
 
-  const decoImages = DECORATIONS.map((d) => {
-    const img = new Image();
-    img.src = `data:image/svg+xml,${d.src}`;
-    return img;
-  });
+  /** @type {HTMLSpanElement[]} */
+  let boardBulbs = [];
+  /** @type {ReturnType<typeof setTimeout>[]} */
+  let bulbTimers = [];
+  const LIT_BULB_COUNT = 5;
+  const BULB_SIDES = ["top", "right", "bottom", "left"];
 
-  function buildFestiveOverlay() {
-    festiveOverlay.innerHTML = "";
-    DECORATIONS.forEach((d) => {
-      const el = document.createElement("img");
-      el.className = "deco";
-      el.src = `data:image/svg+xml,${d.src}`;
-      el.alt = "";
-      el.style.left = `${d.x}%`;
-      el.style.top = `${d.y}%`;
-      el.style.width = `${d.w}%`;
-      el.style.transform = `${d.flip ? "scaleX(-1) " : ""}rotate(${d.rot}deg)`;
-      festiveOverlay.appendChild(el);
-    });
+  function bulbSideList(bulb) {
+    return (bulb.dataset.sides || "").split(",").filter(Boolean);
   }
+
+  function litBulbIndices() {
+    return boardBulbs
+      .map((b, i) => (b.classList.contains("is-on") ? i : -1))
+      .filter((i) => i >= 0);
+  }
+
+  function sidesCoveredBy(indices) {
+    const covered = new Set();
+    indices.forEach((i) => {
+      bulbSideList(boardBulbs[i]).forEach((s) => covered.add(s));
+    });
+    return covered;
+  }
+
+  function pickInitialLitBulbs() {
+    const chosen = new Set();
+
+    // One bulb per side first (prefer exclusive edge bulbs over corners)
+    BULB_SIDES.forEach((side) => {
+      const exclusive = [];
+      const any = [];
+      boardBulbs.forEach((b, i) => {
+        const sides = bulbSideList(b);
+        if (!sides.includes(side)) return;
+        any.push(i);
+        if (sides.length === 1) exclusive.push(i);
+      });
+      const pool = exclusive.length ? exclusive : any;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      chosen.add(pick);
+    });
+
+    while (chosen.size < Math.min(LIT_BULB_COUNT, boardBulbs.length)) {
+      chosen.add(Math.floor(Math.random() * boardBulbs.length));
+    }
+
+    chosen.forEach((i) => boardBulbs[i].classList.add("is-on"));
+  }
+
+  function buildBoardLights() {
+    if (!boardLights) return;
+    boardLights.innerHTML = "";
+    boardBulbs = [];
+
+    // 7 per long side, 5 per short side (corners shared)
+    const top = 7;
+    const side = 5;
+    const positions = [];
+
+    for (let i = 0; i < top; i++) {
+      const sides = ["top"];
+      if (i === 0) sides.push("left");
+      if (i === top - 1) sides.push("right");
+      positions.push({ x: (i / (top - 1)) * 100, y: 0, sides });
+    }
+    for (let i = 1; i < side - 1; i++) {
+      positions.push({ x: 100, y: (i / (side - 1)) * 100, sides: ["right"] });
+    }
+    for (let i = top - 1; i >= 0; i--) {
+      const sides = ["bottom"];
+      if (i === 0) sides.push("left");
+      if (i === top - 1) sides.push("right");
+      positions.push({ x: (i / (top - 1)) * 100, y: 100, sides });
+    }
+    for (let i = side - 2; i >= 1; i--) {
+      positions.push({ x: 0, y: (i / (side - 1)) * 100, sides: ["left"] });
+    }
+
+    positions.forEach((pos) => {
+      const bulb = document.createElement("span");
+      bulb.className = "board-bulb";
+      bulb.style.left = `${pos.x}%`;
+      bulb.style.top = `${pos.y}%`;
+      bulb.dataset.sides = pos.sides.join(",");
+      boardLights.appendChild(bulb);
+      boardBulbs.push(bulb);
+    });
+
+    pickInitialLitBulbs();
+    startBulbTwinkle();
+  }
+
+  function startBulbTwinkle() {
+    bulbTimers.forEach((t) => clearTimeout(t));
+    bulbTimers = [];
+    if (!boardBulbs.length) return;
+
+    const scheduleMove = (fromIndex) => {
+      const delay = 700 + Math.random() * 1600;
+      const timer = setTimeout(() => {
+        if (!boardBulbs.length) return;
+        if (!boardBulbs[fromIndex].classList.contains("is-on")) {
+          // Chain lost sync — restart from a random lit bulb
+          const lit = litBulbIndices();
+          if (lit.length) scheduleMove(lit[Math.floor(Math.random() * lit.length)]);
+          return;
+        }
+
+        boardBulbs[fromIndex].classList.remove("is-on");
+        const remaining = litBulbIndices();
+        const covered = sidesCoveredBy(remaining);
+        const uncovered = BULB_SIDES.filter((s) => !covered.has(s));
+
+        const candidates = boardBulbs
+          .map((b, i) => i)
+          .filter((i) => {
+            if (i === fromIndex) return false;
+            if (boardBulbs[i].classList.contains("is-on")) return false;
+            if (!uncovered.length) return true;
+            const sides = bulbSideList(boardBulbs[i]);
+            return uncovered.every((s) => sides.includes(s));
+          });
+
+        let next;
+        if (candidates.length) {
+          next = candidates[Math.floor(Math.random() * candidates.length)];
+        } else {
+          // Can't move without breaking side coverage — stay put
+          boardBulbs[fromIndex].classList.add("is-on");
+          next = fromIndex;
+        }
+
+        boardBulbs[next].classList.add("is-on");
+        scheduleMove(next);
+      }, delay);
+      bulbTimers.push(timer);
+    };
+
+    litBulbIndices().forEach((i) => scheduleMove(i));
+  }
+
+  const TILE_TONES = [
+    "tone-brown",
+    "tone-amber",
+    "tone-orange",
+    "tone-gold",
+    "tone-rust",
+    "tone-maple",
+    "tone-wheat",
+    "tone-cider",
+  ];
 
   function buildBoard() {
     board.querySelectorAll(".tile").forEach((el) => el.remove());
@@ -145,19 +247,19 @@
       const slot = LAYOUT[i];
       const el = document.createElement("button");
       el.type = "button";
-      el.className = "tile";
+      el.className = `tile ${TILE_TONES[i % TILE_TONES.length]}`;
       el.style.gridRow = String(slot.row);
       el.style.gridColumn = String(slot.col);
       el.dataset.index = String(i);
       el.innerHTML = `<span class="label">${formatValue(value)}</span>`;
-      el.setAttribute("aria-label", `${value} points`);
+      el.setAttribute("aria-label", formatValue(value));
       board.insertBefore(el, cameraWell);
       return { value, isTurkey: false, el };
     });
   }
 
   function formatValue(n) {
-    return n.toLocaleString();
+    return `$${Number(n).toLocaleString()}`;
   }
 
   function activeRunningTotal() {
@@ -168,7 +270,7 @@
 
   function setTurnScore(n) {
     turnScore = n;
-    scoreEl.textContent = activeRunningTotal().toLocaleString();
+    scoreEl.textContent = formatValue(activeRunningTotal());
     if (gameStarted) renderLeaderboard();
   }
 
@@ -191,37 +293,40 @@
   function updateActionButton() {
     btnAction.classList.remove("is-start", "is-stop", "is-keep");
 
+    if (!gameStarted) {
+      btnAction.textContent = "Pull!";
+      btnAction.classList.add("is-start");
+      btnAction.disabled = false;
+      setBankVisible(false);
+      return;
+    }
+
     if (spinning) {
-      btnAction.textContent = "Stop";
+      btnAction.textContent = "Fire!";
       btnAction.classList.add("is-stop");
       btnAction.disabled = false;
       setBankVisible(false);
       return;
     }
 
-    if (!gameStarted || !canAct || turnOver) {
-      btnAction.textContent = spinsThisTurn === 0 ? "Start" : "Keep Going";
-      btnAction.classList.add(spinsThisTurn === 0 ? "is-start" : "is-keep");
+    if (!canAct || turnOver) {
+      btnAction.textContent = "Pull!";
+      btnAction.classList.add("is-start");
       btnAction.disabled = true;
       setBankVisible(false);
       return;
     }
 
     if (awaitingChoice) {
-      btnAction.textContent = "Keep Going";
-      btnAction.classList.add("is-keep");
+      btnAction.textContent = "Pull!";
+      btnAction.classList.add("is-start");
       btnAction.disabled = false;
       setBankVisible(true);
       return;
     }
 
-    if (spinsThisTurn === 0) {
-      btnAction.textContent = "Start";
-      btnAction.classList.add("is-start");
-    } else {
-      btnAction.textContent = "Keep Going";
-      btnAction.classList.add("is-keep");
-    }
+    btnAction.textContent = "Pull!";
+    btnAction.classList.add("is-start");
     btnAction.disabled = false;
     setBankVisible(false);
   }
@@ -298,13 +403,9 @@
   }
 
   function syncSetupButtons() {
-    if (gameStarted) {
-      btnStartGame.textContent = "Done";
-      btnStartGame.disabled = false;
-    } else {
-      btnStartGame.textContent = "Start Game";
-      btnStartGame.disabled = players.length === 0;
-    }
+    const editorOpen = !playersEditor.hidden;
+    btnDonePlayers.hidden = !(gameStarted && editorOpen);
+    btnAddPlayers.hidden = editorOpen;
   }
 
   function playerDisplayTotal(p, index) {
@@ -355,131 +456,91 @@
     }
   }
 
-  function startMusic() {
+  function playGobble() {
+    if (!spinning) return;
     ensureAudio();
-    stopMusic();
 
+    // Cut any overlapping gobble so spins don't become a noise bed
+    if (gobbleGain) {
+      try {
+        gobbleGain.gain.cancelScheduledValues(audioCtx.currentTime);
+        gobbleGain.gain.setValueAtTime(0, audioCtx.currentTime);
+        gobbleGain.disconnect();
+      } catch (_) {
+        /* already gone */
+      }
+      gobbleGain = null;
+    }
+
+    const now = audioCtx.currentTime;
+    const dur = 0.08;
     const master = audioCtx.createGain();
-    master.gain.value = 0.08;
+    master.gain.value = 0.14;
     master.connect(audioCtx.destination);
+    gobbleGain = master;
 
-    const osc1 = audioCtx.createOscillator();
-    const osc2 = audioCtx.createOscillator();
+    const osc = audioCtx.createOscillator();
+    const filter = audioCtx.createBiquadFilter();
+    const gain = audioCtx.createGain();
     const lfo = audioCtx.createOscillator();
     const lfoGain = audioCtx.createGain();
 
-    osc1.type = "square";
-    osc2.type = "triangle";
-    osc1.frequency.value = 220;
-    osc2.frequency.value = 330;
+    osc.type = "triangle";
+    filter.type = "bandpass";
+    filter.frequency.value = 620;
+    filter.Q.value = 3;
 
-    lfo.frequency.value = 8;
-    lfoGain.gain.value = 40;
+    osc.frequency.setValueAtTime(320, now);
+    osc.frequency.linearRampToValueAtTime(160, now + 0.03);
+    osc.frequency.exponentialRampToValueAtTime(110, now + dur);
+
+    lfo.type = "sine";
+    lfo.frequency.value = 24;
+    lfoGain.gain.value = 30;
     lfo.connect(lfoGain);
-    lfoGain.connect(osc1.frequency);
-    lfoGain.connect(osc2.frequency);
+    lfoGain.connect(osc.frequency);
 
-    const pulse = audioCtx.createGain();
-    pulse.gain.value = 0;
-    osc1.connect(pulse);
-    osc2.connect(pulse);
-    pulse.connect(master);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(1, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
 
-    const now = audioCtx.currentTime;
-    for (let i = 0; i < 120; i++) {
-      const t = now + i * 0.08;
-      pulse.gain.setValueAtTime(0.9, t);
-      pulse.gain.exponentialRampToValueAtTime(0.01, t + 0.06);
-    }
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(master);
 
-    osc1.start();
-    osc2.start();
-    lfo.start();
-
-    musicNodes = { osc1, osc2, lfo, master };
+    osc.start(now);
+    lfo.start(now);
+    osc.stop(now + dur + 0.02);
+    lfo.stop(now + dur + 0.02);
   }
 
-  function stopMusic() {
-    if (!musicNodes) return;
-    try {
-      musicNodes.osc1.stop();
-      musicNodes.osc2.stop();
-      musicNodes.lfo.stop();
-      musicNodes.master.disconnect();
-    } catch (_) {
-      /* already stopped */
-    }
-    musicNodes = null;
-  }
-
-  function playSting(kind) {
-    ensureAudio();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-
-    if (kind === "win") {
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(440, now);
-      osc.frequency.exponentialRampToValueAtTime(880, now + 0.15);
-      gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-      osc.start(now);
-      osc.stop(now + 0.4);
-    } else if (kind === "bank") {
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(523, now);
-      osc.frequency.setValueAtTime(659, now + 0.1);
-      osc.frequency.setValueAtTime(784, now + 0.2);
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
-      osc.start(now);
-      osc.stop(now + 0.5);
-    } else if (kind === "shot") {
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(120, now);
-      osc.frequency.exponentialRampToValueAtTime(40, now + 0.25);
-      gain.gain.setValueAtTime(0.22, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-      osc.start(now);
-      osc.stop(now + 0.4);
-    } else {
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(180, now);
-      osc.frequency.exponentialRampToValueAtTime(60, now + 0.45);
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-      osc.start(now);
-      osc.stop(now + 0.55);
-    }
-  }
-
-  function restartAnim(el) {
-    if (!el) return;
-    el.style.animation = "none";
-    void el.offsetWidth;
-    el.style.animation = "";
+  function playSting(_kind) {
+    // Intentionally silent — only spin gobbles should make sound
   }
 
   function playTurkeyAnimation() {
     return new Promise((resolve) => {
-      turkeyBlast.hidden = false;
-      cameraWell.classList.add("is-blasting");
-
-      restartAnim(turkeyBlast.querySelector(".turkey-blast-dim"));
-      restartAnim(turkeyBlast.querySelector(".turkey-actor"));
-      restartAnim(turkeyBlast.querySelector(".shotgun"));
-      restartAnim(turkeyBlast.querySelector(".muzzle-flash"));
-      restartAnim(turkeyBlast.querySelector(".bang"));
-
-      setTimeout(() => playSting("shot"), 1050);
-      setTimeout(() => {
+      const finish = () => {
+        bustVideo.pause();
+        bustVideo.removeEventListener("ended", onEnded);
+        bustVideo.removeEventListener("error", onEnded);
         turkeyBlast.hidden = true;
         cameraWell.classList.remove("is-blasting");
         resolve();
-      }, TURKEY_ANIM_MS);
+      };
+      const onEnded = () => finish();
+
+      turkeyBlast.hidden = false;
+      cameraWell.classList.add("is-blasting");
+      bustVideo.currentTime = 0;
+      bustVideo.muted = true; // keep silent — SFX only during spins
+      bustVideo.addEventListener("ended", onEnded);
+      bustVideo.addEventListener("error", onEnded);
+
+      const playAttempt = bustVideo.play();
+      if (playAttempt && typeof playAttempt.catch === "function") {
+        playAttempt.catch(() => finish());
+      }
     });
   }
 
@@ -501,6 +562,7 @@
   function tickSpin() {
     if (!spinning) return;
     setLit(pickNextIndex());
+    playGobble();
     const delay = SPIN_MIN_MS + Math.random() * (SPIN_MAX_MS - SPIN_MIN_MS);
     spinTimer = setTimeout(tickSpin, delay);
   }
@@ -512,7 +574,7 @@
     tiles.forEach((t) => t.el.classList.remove("is-awarded"));
     spinning = true;
     updateActionButton();
-    startMusic();
+    ensureAudio();
     tickSpin();
   }
 
@@ -527,7 +589,15 @@
     if (!spinning) return;
     spinning = false;
     clearSpinTimers();
-    stopMusic();
+    if (gobbleGain) {
+      try {
+        gobbleGain.gain.setValueAtTime(0, audioCtx?.currentTime || 0);
+        gobbleGain.disconnect();
+      } catch (_) {
+        /* ignore */
+      }
+      gobbleGain = null;
+    }
 
     const landed = tiles[litIndex];
     if (!landed) {
@@ -574,7 +644,15 @@
 
     landed.isTurkey = true;
     landed.el.classList.add("is-turkey");
-    landed.el.querySelector(".label").textContent = "TURKEY";
+    const label = landed.el.querySelector(".label");
+    if (label) label.remove();
+    if (!landed.el.querySelector(".turkey-pic")) {
+      const pic = document.createElement("img");
+      pic.className = "turkey-pic";
+      pic.src = "assets/turkey-tile.png";
+      pic.alt = "Turkey";
+      landed.el.appendChild(pic);
+    }
     landed.el.setAttribute("aria-label", "Turkey");
 
     awaitingChoice = true;
@@ -585,23 +663,6 @@
     await playTurkeyAnimation();
     await (reactionCapturePromise || Promise.resolve());
     openEndTurnGallery("turkey");
-  }
-
-  function drawDecorations(ctx, w, h) {
-    DECORATIONS.forEach((d, i) => {
-      const img = decoImages[i];
-      if (!img.complete || !img.naturalWidth) return;
-      const dw = (d.w / 100) * w;
-      const dh = (img.naturalHeight / img.naturalWidth) * dw;
-      const x = (d.x / 100) * w;
-      const y = (d.y / 100) * h;
-      ctx.save();
-      ctx.translate(x + dw / 2, y + dh / 2);
-      if (d.flip) ctx.scale(-1, 1);
-      ctx.rotate((d.rot * Math.PI) / 180);
-      ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
-      ctx.restore();
-    });
   }
 
   function captureReaction({ bust, label, name }) {
@@ -618,7 +679,6 @@
     ctx.scale(-1, 1);
     ctx.drawImage(camera, 0, 0, w, h);
     ctx.restore();
-    drawDecorations(ctx, w, h);
 
     const dataUrl = captureCanvas.toDataURL("image/jpeg", 0.85);
     const player = players[currentPlayer];
@@ -632,7 +692,25 @@
       <img src="${dataUrl}" alt="Reaction from ${escapeHtml(name)}" />
       <div class="meta"><strong>${label}</strong>${escapeHtml(name)}</div>
     `;
+    card.addEventListener("click", () => {
+      openReactionPreview(dataUrl, `${name}-reaction.jpg`);
+    });
     reactionStrip.prepend(card);
+  }
+
+  function openReactionPreview(dataUrl, filename) {
+    // Available between turns / while idle — not mid-spin or during end-turn gallery
+    if (spinning || !modalRoot.hidden) return;
+    previewDataUrl = dataUrl;
+    previewFilename = filename || "reaction.jpg";
+    previewImage.src = dataUrl;
+    previewModal.hidden = false;
+  }
+
+  function closeReactionPreview() {
+    previewModal.hidden = true;
+    previewImage.removeAttribute("src");
+    previewDataUrl = "";
   }
 
   async function bankPoints() {
@@ -640,7 +718,7 @@
     const bankedAmount = turnScore;
     players[currentPlayer].banked += bankedAmount;
     setTurnScore(0);
-    showBanner(`Banked ${formatValue(bankedAmount)}!`);
+    showBanner(`Bagged ${formatValue(bankedAmount)}!`);
     playSting("bank");
     awaitingChoice = false;
     canAct = false;
@@ -664,16 +742,26 @@
     modalBody.classList.remove("is-winner");
   }
 
+  function isMultiplayer() {
+    return players.length > 1;
+  }
+
+  function isLastPlayerTurn() {
+    return players.every((p, i) => i === endTurnPlayerIndex || p.done);
+  }
+
   function openEndTurnGallery(reason) {
     endTurnPlayerIndex = currentPlayer;
     const player = players[endTurnPlayerIndex];
-    selectedFavoriteIndex = player.reactions.length ? 0 : -1;
+    const multi = isMultiplayer();
+    selectedFavoriteIndex = -1;
 
-    modalTitle.textContent = `${player.name}'s Reactions`;
-    modalSubtitle.textContent =
-      reason === "turkey"
-        ? "Turkey got you! Pick your favorite reaction before the next player."
-        : "Nice bank! Pick your favorite reaction before the next player.";
+    if (multi) {
+      modalTitle.textContent = "Pick your favorite photo to continue";
+    } else {
+      modalTitle.textContent = `${player.name}'s results`;
+    }
+    modalSubtitle.innerHTML = `<span class="end-turn-cash">${formatValue(player.banked)}</span>`;
 
     renderGalleryBody(player);
     renderGalleryActions(player);
@@ -682,6 +770,7 @@
 
   function renderGalleryBody(player) {
     modalBody.classList.remove("is-winner");
+    const multi = isMultiplayer();
     if (!player.reactions.length) {
       modalBody.innerHTML = `<p class="modal-subtitle">No reaction photos this turn.</p>`;
       return;
@@ -690,24 +779,22 @@
     modalBody.innerHTML = "";
     player.reactions.forEach((r, i) => {
       const item = document.createElement("div");
-      item.className = "gallery-item" + (i === selectedFavoriteIndex ? " is-selected" : "");
+      item.className = "gallery-item" + (multi && i === selectedFavoriteIndex ? " is-selected" : "");
       item.innerHTML = `
+        ${multi && i === selectedFavoriteIndex ? `<span class="fav-badge" aria-label="Favorite">★</span>` : ""}
         <img src="${r.dataUrl}" alt="Reaction ${i + 1}" />
         <div class="g-meta"><strong>${escapeHtml(r.label)}</strong>${r.bust ? "Bust" : "Hit"}</div>
-        <button type="button" class="btn-pick">${i === selectedFavoriteIndex ? "★ Favorite" : "Pick favorite"}</button>
-        <button type="button" class="btn-dl">Download</button>
+        <button type="button" class="btn-dl" aria-label="Download">⬇</button>
       `;
-      item.querySelector("img").addEventListener("click", () => {
-        selectedFavoriteIndex = i;
-        renderGalleryBody(player);
-        renderGalleryActions(player);
-      });
-      item.querySelector(".btn-pick").addEventListener("click", () => {
-        selectedFavoriteIndex = i;
-        renderGalleryBody(player);
-        renderGalleryActions(player);
-      });
-      item.querySelector(".btn-dl").addEventListener("click", () => {
+      if (multi) {
+        item.querySelector("img").addEventListener("click", () => {
+          selectedFavoriteIndex = i;
+          renderGalleryBody(player);
+          renderGalleryActions(player);
+        });
+      }
+      item.querySelector(".btn-dl").addEventListener("click", (e) => {
+        e.stopPropagation();
         downloadDataUrl(r.dataUrl, `${player.name}-reaction-${i + 1}.jpg`);
       });
       modalBody.appendChild(item);
@@ -716,6 +803,8 @@
 
   function renderGalleryActions(player) {
     modalActions.innerHTML = "";
+    const multi = isMultiplayer();
+    const last = isLastPlayerTurn();
 
     const dlAll = document.createElement("button");
     dlAll.type = "button";
@@ -731,15 +820,23 @@
     const confirm = document.createElement("button");
     confirm.type = "button";
     confirm.className = "btn btn-confirm-fav";
-    confirm.textContent = "Continue";
-    confirm.disabled = player.reactions.length > 0 && selectedFavoriteIndex < 0;
+    if (!multi || last) {
+      confirm.textContent = "End Game";
+    } else {
+      confirm.textContent = "Next Player";
+    }
+    confirm.disabled = multi && player.reactions.length > 0 && selectedFavoriteIndex < 0;
     confirm.addEventListener("click", () => {
-      if (player.reactions.length && selectedFavoriteIndex >= 0) {
+      if (multi && player.reactions.length && selectedFavoriteIndex >= 0) {
         const fav = player.reactions[selectedFavoriteIndex].dataUrl;
         player.favorite = fav;
         saveFavorite(player.name, fav);
       }
       closeModal();
+      if (!multi) {
+        returnToLobby();
+        return;
+      }
       completePlayerTurn();
     });
 
@@ -761,7 +858,7 @@
     const next = players.findIndex((p) => !p.done);
     if (next === -1) {
       canAct = false;
-      scoreEl.textContent = "0";
+      scoreEl.textContent = formatValue(0);
       renderLeaderboard();
       updateActionButton();
       showWinner();
@@ -776,36 +873,56 @@
   }
 
   function showWinner() {
+    // Multiplayer only — solo ends on the results gallery
     const topScore = Math.max(...players.map((p) => p.banked));
     const winners = players.filter((p) => p.banked === topScore);
     const winner = winners[0];
     const favMap = loadFavoritesMap();
     const photo = winner.favorite || favMap[winner.name] || winner.reactions.at(-1)?.dataUrl || null;
 
+    modalBody.classList.add("is-winner");
+    modalActions.innerHTML = "";
     modalTitle.textContent = winners.length > 1 ? "It's a tie!" : `${winner.name} wins!`;
     modalSubtitle.textContent =
       winners.length > 1
-        ? `${winners.map((w) => w.name).join(" & ")} — ${formatValue(topScore)} points`
-        : `${formatValue(topScore)} points banked`;
+        ? `${winners.map((w) => w.name).join(" & ")} — ${formatValue(topScore)}`
+        : formatValue(topScore);
+    modalBody.innerHTML = photo
+      ? `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(winner.name)}" />`
+      : `<p class="modal-subtitle">No favorite photo saved.</p>`;
 
-    modalBody.classList.add("is-winner");
-    if (photo) {
-      modalBody.innerHTML = `<img class="winner-photo" src="${photo}" alt="Winning reaction from ${escapeHtml(winner.name)}" />`;
-    } else {
-      modalBody.innerHTML = `<p class="modal-subtitle">No favorite photo saved.</p>`;
-    }
-
-    modalActions.innerHTML = "";
     const again = document.createElement("button");
     again.type = "button";
     again.className = "btn btn-play-again";
-    again.textContent = "Play Again";
+    again.textContent = "End Game";
     again.addEventListener("click", () => {
       closeModal();
-      resetForNewGame();
+      returnToLobby();
     });
     modalActions.appendChild(again);
     modalRoot.hidden = false;
+  }
+
+  function returnToLobby() {
+    gameStarted = false;
+    players = [];
+    currentPlayer = 0;
+    spinsThisTurn = 0;
+    turnOver = false;
+    awaitingChoice = false;
+    canAct = false;
+    soloStartArmed = false;
+    setSoloWarning(false);
+    setTurnScore(0);
+    scoreLabel.textContent = "Turn";
+    clearReactionStrip();
+    hideBanner();
+    setLit(-1);
+    buildBoard();
+    renderPlayerList();
+    renderLeaderboard();
+    syncSetupButtons();
+    updateActionButton();
   }
 
   function resetForNewGame() {
@@ -826,26 +943,43 @@
     buildBoard();
     setTurnScore(0);
     updateActionButton();
-    controls.hidden = false;
   }
 
   function collapsePlayersEditor() {
     playersEditor.hidden = true;
-    btnAddPlayers.hidden = false;
     setupPanel.hidden = false;
     setupPanel.style.display = "";
     setupPanel.removeAttribute("aria-hidden");
+    syncSetupButtons();
   }
 
   function openPlayersEditor() {
     playersEditor.hidden = false;
-    btnAddPlayers.hidden = true;
     syncSetupButtons();
     playerNameInput.focus();
   }
 
+  function ensurePlayersForStart() {
+    if (players.length === 0) {
+      players.push({
+        name: "Player 1",
+        banked: 0,
+        reactions: [],
+        favorite: null,
+        done: false,
+      });
+      renderPlayerList();
+    }
+  }
+
+  function setSoloWarning(visible) {
+    soloWarning.hidden = !visible;
+  }
+
   function beginGame() {
-    if (players.length === 0) return;
+    ensurePlayersForStart();
+    soloStartArmed = false;
+    setSoloWarning(false);
     gameStarted = true;
     currentPlayer = 0;
     spinsThisTurn = 0;
@@ -854,22 +988,27 @@
     canAct = true;
     scoreLabel.textContent = players[currentPlayer].name;
     collapsePlayersEditor();
-    controls.hidden = false;
     clearReactionStrip();
     buildBoard();
     setTurnScore(0);
     updateActionButton();
   }
 
-  function onSetupPrimaryClick() {
-    if (gameStarted) {
-      collapsePlayersEditor();
+  function tryBeginFromStartButton() {
+    if (players.length === 0 && !soloStartArmed) {
+      soloStartArmed = true;
+      setSoloWarning(true);
       return;
     }
     beginGame();
+    startSpin();
   }
 
   function onActionClick() {
+    if (!gameStarted) {
+      tryBeginFromStartButton();
+      return;
+    }
     if (spinning) stopSpin();
     else startSpin();
   }
@@ -880,6 +1019,8 @@
     e.preventDefault();
     const name = playerNameInput.value.trim();
     if (!name) return;
+    soloStartArmed = false;
+    setSoloWarning(false);
     players.push({ name, banked: 0, reactions: [], favorite: null, done: false });
     playerNameInput.value = "";
     renderPlayerList();
@@ -888,24 +1029,47 @@
     playerNameInput.focus();
   });
 
-  btnStartGame.addEventListener("click", onSetupPrimaryClick);
+  btnDonePlayers.addEventListener("click", collapsePlayersEditor);
   btnAction.addEventListener("click", onActionClick);
   btnBank.addEventListener("click", () => {
     bankPoints();
   });
 
+  previewBackdrop.addEventListener("click", closeReactionPreview);
+  previewClose.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeReactionPreview();
+  });
+  previewModal.addEventListener("click", (e) => {
+    if (e.target === previewModal) closeReactionPreview();
+  });
+  previewDownload.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (previewDataUrl) downloadDataUrl(previewDataUrl, previewFilename);
+  });
   window.addEventListener("keydown", (e) => {
-    if (e.code === "Space" && gameStarted && modalRoot.hidden) {
-      const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      e.preventDefault();
-      if (spinning) stopSpin();
-      else if (canAct && !turnOver) startSpin();
+    if (e.code === "Escape" && !previewModal.hidden) {
+      closeReactionPreview();
+      return;
     }
   });
 
-  buildFestiveOverlay();
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || !modalRoot.hidden || !previewModal.hidden) return;
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    e.preventDefault();
+    if (!gameStarted) {
+      tryBeginFromStartButton();
+      return;
+    }
+    if (spinning) stopSpin();
+    else if (canAct && !turnOver) startSpin();
+  });
+
   buildBoard();
+  buildBoardLights();
+  syncSetupButtons();
   updateActionButton();
   startCamera();
 
