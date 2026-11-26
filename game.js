@@ -22,7 +22,7 @@
 
   const SPIN_MIN_MS = 70;
   const SPIN_MAX_MS = 140;
-  const REACTION_DELAY_MS = 750;
+  const REACTION_DELAY_MS = 1500;
   const FAVORITES_KEY = "turkeyTroubleFavorites";
 
   const board = document.getElementById("board");
@@ -533,7 +533,7 @@
       turkeyBlast.hidden = false;
       cameraWell.classList.add("is-blasting");
       bustVideo.currentTime = 0;
-      bustVideo.muted = true; // keep silent — SFX only during spins
+      bustVideo.muted = false;
       bustVideo.addEventListener("ended", onEnded);
       bustVideo.addEventListener("error", onEnded);
 
@@ -661,6 +661,12 @@
 
   async function finishTurnAfterTurkey() {
     await playTurkeyAnimation();
+    const playerName = players[currentPlayer]?.name || "Player";
+    captureReaction({
+      bust: true,
+      label: "Bust!",
+      name: playerName,
+    });
     await (reactionCapturePromise || Promise.resolve());
     openEndTurnGallery("turkey");
   }
