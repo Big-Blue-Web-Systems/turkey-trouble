@@ -28,6 +28,7 @@
   const TILE_PULSE_MS = 550;
   const TILE_FLIP_MS = 450;
   const REACTION_FLASH_MS = 1000;
+  const TURKEY_MESSAGE_MS = 3000;
   /** Fallback only if overlay duration can't be measured */
   const REACTION_CLIP_MS = 3000;
   const REACTION_CLIP_FPS = 10;
@@ -470,6 +471,7 @@
     resultBanner.classList.add("is-turkey", "is-centered");
     resultBanner.innerHTML = `
       <span class="banner-title">Turkey Tom Got You!</span>
+      <span class="banner-sep" aria-hidden="true">·</span>
       <span class="banner-sub">You've lost all your cash</span>
     `;
   }
@@ -906,12 +908,89 @@
   cardFlipSfx.volume = 0.75;
   cardFlipSfx.addEventListener("ended", () => syncLobbyMusic());
 
+  const podiumApplause = new Audio("assets/podium-real-applause.ogg");
+  podiumApplause.preload = "auto";
+  podiumApplause.volume = 0.7;
+  podiumApplause.addEventListener("ended", () => syncLobbyMusic());
+
+  // Source remastered to lobby peak; keep playback gain near lobby so levels match.
+  const noWinnerComedy = new Audio("assets/no-winner-comedy.wav");
+  noWinnerComedy.preload = "auto";
+  noWinnerComedy.volume = 0.38;
+  noWinnerComedy.addEventListener("ended", () => syncLobbyMusic());
+
   function lobbyMusicAllowed() {
     return soundMode === "all";
   }
 
   function effectsAllowed() {
     return soundMode !== "mute";
+  }
+
+  function isPodiumApplausePlaying() {
+    return effectsAllowed() && !podiumApplause.paused && !podiumApplause.ended;
+  }
+
+  function isNoWinnerComedyPlaying() {
+    return effectsAllowed() && !noWinnerComedy.paused && !noWinnerComedy.ended;
+  }
+
+  function stopPodiumApplause() {
+    try {
+      podiumApplause.pause();
+      podiumApplause.currentTime = 0;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function stopNoWinnerComedy() {
+    try {
+      noWinnerComedy.pause();
+      noWinnerComedy.currentTime = 0;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function stopResultFanfare() {
+    stopPodiumApplause();
+    stopNoWinnerComedy();
+    syncLobbyMusic();
+  }
+
+  function playPodiumApplause() {
+    if (!effectsAllowed()) return;
+    stopNoWinnerComedy();
+    try {
+      podiumApplause.pause();
+      podiumApplause.currentTime = 0;
+      const playAttempt = podiumApplause.play();
+      if (playAttempt) playAttempt.catch(() => {});
+    } catch (_) {
+      /* ignore playback errors */
+    }
+    syncLobbyMusic();
+  }
+
+  function playNoWinnerComedy() {
+    if (!effectsAllowed()) return;
+    stopPodiumApplause();
+    try {
+      noWinnerComedy.pause();
+      noWinnerComedy.currentTime = 0;
+      const playAttempt = noWinnerComedy.play();
+      if (playAttempt) playAttempt.catch(() => {});
+    } catch (_) {
+      /* ignore playback errors */
+    }
+    syncLobbyMusic();
+  }
+
+  /** End-of-turn sting: applause if cash was bagged, comedy/boo if Turkey Tom busted them. */
+  function playEndTurnResultSound(reason) {
+    if (reason === "turkey") playNoWinnerComedy();
+    else if (reason === "bank") playPodiumApplause();
   }
 
   function isOverlayClipPlaying() {
@@ -988,6 +1067,7 @@
     closeSoundModeMenu();
     if (!effectsAllowed()) {
       stopCardFlipSfx();
+      stopResultFanfare();
       silenceSpinTicks();
     }
     syncOverlayClipMute();
@@ -1014,7 +1094,9 @@
       !document.hidden &&
       !spinning &&
       !isOverlayClipPlaying() &&
-      !isCardFlipSfxPlaying();
+      !isCardFlipSfxPlaying() &&
+      !isPodiumApplausePlaying() &&
+      !isNoWinnerComedyPlaying();
     if (!shouldPlay) {
       if (!lobbyMusic.paused) lobbyMusic.pause();
       return;
@@ -1392,11 +1474,16 @@
 
   async function finishTurnAfterTurkey(bustPromise) {
     await (bustPromise || playTurkeyAnimation());
+    // Bust clip done — show copy immediately, hold 3s (capture can finish in parallel)
     showTurkeyBustMessage();
-    await (reactionCapturePromise || Promise.resolve());
+    await Promise.all([
+      waitMs(TURKEY_MESSAGE_MS),
+      reactionCapturePromise || Promise.resolve(),
+    ]);
     const latest = players[currentPlayer]?.reactions?.at(-1);
     const reactionToShow = reactionDisplayUrl(latest) || null;
     await flashReactionPhoto(reactionToShow);
+    hideBanner();
     openEndTurnGallery("turkey");
   }
 
@@ -2128,6 +2215,7 @@
   }
 
   function closeModal() {
+    stopResultFanfare();
     modalBody.querySelectorAll("[data-clip-root]").forEach((node) => {
       node._clipPlayer?.destroy?.();
     });
@@ -2260,6 +2348,14 @@
     renderGalleryBody(player);
     renderGalleryActions(player);
     modalRoot.hidden = false;
+
+    // Solo game over with $0 across all rounds → no-winner comedy.
+    // Otherwise end-of-turn: podium if cash bagged this turn, comedy/boo if Turkey Tom.
+    if (!multi && isLastPlayerTurn() && player.banked <= 0) {
+      playNoWinnerComedy();
+    } else {
+      playEndTurnResultSound(reason);
+    }
   }
 
   function renderGalleryBody(player) {
@@ -2445,6 +2541,8 @@
     });
     modalActions.appendChild(again);
     modalRoot.hidden = false;
+    if (topScore <= 0) playNoWinnerComedy();
+    else playPodiumApplause();
   }
 
   function returnToLobby() {
