@@ -179,12 +179,12 @@
   let previewFilename = "reaction.png";
   /** @type {ReturnType<typeof createClipPlayer>|null} */
   let previewClipPlayer = null;
-  /** @type {{dataUrl:string,frames?:string[],frameIndex?:number,selectedFrameIndex?:number,isClip?:boolean,label:string,bust:boolean}|null} */
+  /** @type {{dataUrl:string,frames?:string[],frameIndex?:number,selectedFrameIndex?:number,isClip?:boolean,label:string,bust:boolean,score?:number,hits?:number}|null} */
   let previewReaction = null;
 
   /** @type {{ value: number, isTurkey: boolean, el: HTMLButtonElement }[]} */
   let tiles = [];
-  /** @type {{ name: string, banked: number, hits: number, reactions: {dataUrl:string,frames?:string[],frameIndex?:number,isClip?:boolean,label:string,bust:boolean}[], favorite: string|null, done: boolean, roundsPlayed: number }[]} */
+  /** @type {{ name: string, banked: number, hits: number, reactions: {dataUrl:string,frames?:string[],frameIndex?:number,isClip?:boolean,label:string,bust:boolean,score?:number,hits?:number}[], favorite: string|null, done: boolean, roundsPlayed: number }[]} */
   let players = [];
   let currentPlayer = 0;
   let totalRounds = 1;
@@ -2058,6 +2058,7 @@
     const playerName = players[currentPlayer]?.name || "Player";
 
     const reactionLabel = wasTurkey ? "Bust!" : `+${formatValue(awardedValue)}`;
+    const reactionHud = snapshotReactionHud(wasTurkey, awardedValue);
 
     if (wasTurkey) {
       // Keep dials on the current total until money_drain during the bust message
@@ -2074,6 +2075,8 @@
           bust: true,
           label: reactionLabel,
           name: playerName,
+          score: reactionHud.score,
+          hits: reactionHud.hits,
           untilPromise: bustPromise,
         });
       } else if (isReactionImageMode()) {
@@ -2081,6 +2084,8 @@
           bust: true,
           label: reactionLabel,
           name: playerName,
+          score: reactionHud.score,
+          hits: reactionHud.hits,
         });
       } else {
         reactionCapturePromise = Promise.resolve();
@@ -2096,6 +2101,8 @@
         bust: false,
         label: reactionLabel,
         name: playerName,
+        score: reactionHud.score,
+        hits: reactionHud.hits,
         untilPromise: firePromise,
       });
     } else if (isReactionImageMode()) {
@@ -2103,6 +2110,8 @@
         bust: false,
         label: reactionLabel,
         name: playerName,
+        score: reactionHud.score,
+        hits: reactionHud.hits,
       });
     } else {
       reactionCapturePromise = Promise.resolve();
@@ -2512,6 +2521,120 @@
     ctx.drawImage(banner, 0, 0, w, h);
   }
 
+  /**
+   * Score/hits at the moment of this spin’s result (before dial credit / drain animations).
+   * Wins include the awarded cash + the new hit; busts keep the pre-drain total.
+   */
+  function snapshotReactionHud(bust, awardedValue) {
+    const p = players[currentPlayer];
+    const hits = (p?.hits || 0) + (bust ? 0 : 1);
+    const award = Math.max(0, Math.round(Number(awardedValue) || 0));
+    const score = bust ? activeRunningTotal() : activeRunningTotal() + award;
+    return { score, hits };
+  }
+
+  function reactionHasHud(reaction) {
+    if (!reaction) return false;
+    // Prior-round favorites are stored as bare dataUrls — no spin/score snapshot.
+    if (reaction.isPriorFavorite && reaction.score == null && reaction.hits == null) return false;
+    return reaction.label != null || reaction.score != null || reaction.hits != null;
+  }
+
+  function reactionOverlayHtml(reaction) {
+    if (!reactionHasHud(reaction)) return "";
+    const label = escapeHtml(reaction.label || "");
+    const score = formatValue(Math.max(0, Math.round(Number(reaction.score) || 0)));
+    const hits = Math.max(0, Math.floor(Number(reaction.hits) || 0));
+    const spinClass = reaction.bust ? "reaction-hud-spin is-bust" : "reaction-hud-spin";
+    return `<div class="reaction-hud" aria-hidden="true">
+      <div class="${spinClass}">${label}</div>
+      <div class="reaction-hud-stats">
+        <span class="reaction-hud-score">${score}</span>
+        <span class="reaction-hud-hits"><span class="lb-hits-icon"></span>${hits}</span>
+      </div>
+    </div>`;
+  }
+
+  function syncPreviewReactionHud(reaction) {
+    const frame = previewImage?.parentElement;
+    if (!frame) return;
+    frame.querySelectorAll(".reaction-hud").forEach((el) => el.remove());
+    if (!reactionHasHud(reaction)) return;
+    frame.insertAdjacentHTML("beforeend", reactionOverlayHtml(reaction));
+  }
+
+  /** Preload crosshair for canvas stamps (same asset as leaderboard hits). */
+  const hitsIconImage = new Image();
+  hitsIconImage.decoding = "async";
+  hitsIconImage.src = "assets/crosshair-hit.png";
+
+  function drawGoldHitsIcon(ctx, x, y, size) {
+    const icon = hitsIconImage;
+    if (!icon.complete || !icon.naturalWidth) return;
+    const oc = document.createElement("canvas");
+    oc.width = size;
+    oc.height = size;
+    const octx = oc.getContext("2d");
+    if (!octx) return;
+    octx.drawImage(icon, 0, 0, size, size);
+    octx.globalCompositeOperation = "source-in";
+    octx.fillStyle = "#f0b429";
+    octx.fillRect(0, 0, size, size);
+    ctx.drawImage(oc, x, y);
+  }
+
+  function strokeFillText(ctx, text, x, y) {
+    ctx.strokeText(text, x, y);
+    ctx.fillText(text, x, y);
+  }
+
+  /** Bake spin result + score/hits into a downloaded still/video frame (after border). */
+  function stampReactionHudOnCanvas(ctx, w, h, reaction) {
+    if (!reactionHasHud(reaction)) return;
+    const label = String(reaction.label || "").trim();
+    const scoreN = Math.max(0, Math.round(Number(reaction.score) || 0));
+    const hitsN = Math.max(0, Math.floor(Number(reaction.hits) || 0));
+
+    const padX = Math.round(w * 0.085);
+    const padTop = Math.round(h * 0.08);
+    const padBottom = Math.round(h * 0.085);
+    const spinPx = Math.max(28, Math.round(w * 0.09));
+    const statsPx = Math.max(20, Math.round(w * 0.055));
+    const stroke = Math.max(3, Math.round(w * 0.01));
+
+    ctx.save();
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = stroke;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.78)";
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    if (label) {
+      ctx.font = `${spinPx}px Bangers, cursive`;
+      ctx.fillStyle = reaction.bust ? "#e85a45" : "#f0b429";
+      strokeFillText(ctx, label, padX, padTop);
+    }
+
+    const scoreText = formatValue(scoreN);
+    const hitsText = String(hitsN);
+    ctx.font = `700 ${statsPx}px "Space Grotesk", system-ui, sans-serif`;
+    ctx.fillStyle = "#f0b429";
+    const statsY = h - padBottom - statsPx;
+    strokeFillText(ctx, scoreText, padX, statsY);
+
+    const scoreW = ctx.measureText(scoreText).width;
+    const gap = Math.round(statsPx * 0.55);
+    const iconSize = Math.round(statsPx * 0.95);
+    const iconX = padX + scoreW + gap;
+    const iconY = statsY + Math.round((statsPx - iconSize) / 2);
+    drawGoldHitsIcon(ctx, iconX, iconY, iconSize);
+    const hitsX = iconX + iconSize + Math.round(statsPx * 0.22);
+    strokeFillText(ctx, hitsText, hitsX, statsY);
+    ctx.restore();
+  }
+
   function grabReactionFrameDataUrl() {
     if (!camera.srcObject) return null;
     const crop = getReactionCoverCrop();
@@ -2775,7 +2898,10 @@
     card.className = "reaction-card" + (reaction.bust ? " is-bust" : "");
     card._reaction = reaction;
     card.innerHTML = `
-      <img src="${dataUrl}" alt="Reaction from ${escapeHtml(name)}" />
+      <div class="reaction-shot">
+        <img src="${dataUrl}" alt="Reaction from ${escapeHtml(name)}" />
+        ${reactionOverlayHtml(reaction)}
+      </div>
       <div class="meta"><strong>${escapeHtml(reaction.label)}</strong>${escapeHtml(name)}</div>
     `;
     card.addEventListener("click", () => {
@@ -2786,11 +2912,11 @@
     layoutReactionsStack();
   }
 
-  function scheduleStillReaction({ bust, label, name }) {
+  function scheduleStillReaction({ bust, label, name, score, hits }) {
     return new Promise((resolve) => {
       if (reactionTimer) clearTimeout(reactionTimer);
       reactionTimer = setTimeout(() => {
-        captureReaction({ bust, label, name });
+        captureReaction({ bust, label, name, score, hits });
         reactionTimer = null;
         reactionCapturePromise = null;
         resolve();
@@ -2856,7 +2982,7 @@
     }
   }
 
-  async function captureReactionClip({ bust, label, name, untilPromise }) {
+  async function captureReactionClip({ bust, label, name, score, hits, untilPromise }) {
     if (!camera.srcObject) return;
     const frames = [];
     const interval = Math.round(1000 / REACTION_CLIP_FPS);
@@ -2910,6 +3036,8 @@
       isClip: true,
       label,
       bust,
+      score,
+      hits,
       audioBlob: audioBlob || null,
       audioUrl,
       flashTrim,
@@ -2921,11 +3049,11 @@
     prependReactionCard(reaction, name);
   }
 
-  function captureReaction({ bust, label, name }) {
+  function captureReaction({ bust, label, name, score, hits }) {
     const dataUrl = grabReactionFrameDataUrl();
     if (!dataUrl) return;
 
-    const reaction = { dataUrl, label, bust };
+    const reaction = { dataUrl, label, bust, score, hits };
     const player = players[currentPlayer];
     if (player) {
       player.reactions.push(reaction);
@@ -2984,7 +3112,13 @@
     return String(filename || "reaction.png").replace(/\.(jpg|jpeg|webp)$/i, ".png");
   }
 
-  function downloadReactionWithBanner(dataUrl, filename) {
+  function downloadReactionWithBanner(reactionOrUrl, filename) {
+    const reaction =
+      reactionOrUrl && typeof reactionOrUrl === "object"
+        ? reactionOrUrl
+        : { dataUrl: reactionOrUrl };
+    const dataUrl = reactionDisplayUrl(reaction) || reaction.dataUrl;
+    if (!dataUrl) return;
     const img = new Image();
     img.onload = () => {
       const srcW = img.naturalWidth || 640;
@@ -3008,6 +3142,7 @@
       drawImageCover(ctx, img, outW, outH);
       // Stamp the original PNG last so JPEG camera compression never touches the border.
       stampBannerOnCanvas(ctx, outW, outH);
+      stampReactionHudOnCanvas(ctx, outW, outH, reaction);
       downloadDataUrl(canvas.toDataURL("image/png"), pngDownloadName(filename));
     };
     img.onerror = () => downloadDataUrl(dataUrl, pngDownloadName(filename));
@@ -3045,14 +3180,11 @@
   async function downloadReactionVideo(reaction, filename) {
     const frames = reaction?.frames?.length ? reaction.frames : null;
     if (!frames?.length) {
-      downloadReactionWithBanner(reactionDisplayUrl(reaction), filename.replace(/\.(webm|mp4)$/i, ".png"));
+      downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
       return;
     }
     if (typeof MediaRecorder === "undefined" || !HTMLCanvasElement.prototype.captureStream) {
-      downloadReactionWithBanner(
-        frames[ensureSelectedFrameIndex(reaction)] || frames[0],
-        filename.replace(/\.(webm|mp4)$/i, ".png")
-      );
+      downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
       return;
     }
 
@@ -3092,6 +3224,7 @@
       ctx.clearRect(0, 0, outW, outH);
       drawImageCover(ctx, frameImg, outW, outH);
       stampBannerOnCanvas(ctx, outW, outH);
+      stampReactionHudOnCanvas(ctx, outW, outH, reaction);
     };
 
     paintFrame(first);
@@ -3138,6 +3271,7 @@
     previewDataUrl = reactionDisplayUrl(reaction);
     previewFilename = pngDownloadName(filename || "reaction.png");
     previewImage.src = previewDataUrl;
+    syncPreviewReactionHud(reaction);
     if (previewSelectStatus) previewSelectStatus.hidden = true;
 
     const hasClip = reactionHasClip(reaction);
@@ -3179,6 +3313,7 @@
     previewModal.hidden = true;
     previewImage.removeAttribute("src");
     previewDataUrl = "";
+    syncPreviewReactionHud(null);
     if (previewClip) previewClip.hidden = true;
     if (previewSelectStatus) previewSelectStatus.hidden = true;
     if (previewPip) {
@@ -3393,6 +3528,7 @@
               : ""
           }
           <img class="g-playback" src="${currentUrl}" alt="Reaction ${i + 1}" />
+          ${reactionOverlayHtml(r)}
           ${
             hasClip
               ? `<img class="clip-pip" data-clip-pip src="${currentUrl}" alt="Selected frame" />`
@@ -3436,7 +3572,7 @@
       }
       item.querySelector('[data-dl="image"]')?.addEventListener("click", (e) => {
         e.stopPropagation();
-        downloadReactionWithBanner(reactionDisplayUrl(r), filename);
+        downloadReactionWithBanner(r, filename);
       });
       item.querySelector('[data-dl="video"]')?.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -3459,7 +3595,7 @@
     dlAll.disabled = entries.length === 0;
     dlAll.addEventListener("click", () => {
       entries.forEach((r, i) => {
-        downloadReactionWithBanner(reactionDisplayUrl(r), `${player.name}-reaction-${i + 1}.png`);
+        downloadReactionWithBanner(r, `${player.name}-reaction-${i + 1}.png`);
       });
     });
 
@@ -3897,7 +4033,11 @@
   });
   previewDownloadImage?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (previewDataUrl) downloadReactionWithBanner(previewDataUrl, previewFilename || "reaction.png");
+    if (!previewReaction && !previewDataUrl) return;
+    downloadReactionWithBanner(
+      previewReaction || { dataUrl: previewDataUrl },
+      previewFilename || "reaction.png"
+    );
   });
   previewDownloadVideo?.addEventListener("click", (e) => {
     e.stopPropagation();
