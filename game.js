@@ -23,6 +23,8 @@
   const SPIN_MIN_MS = 70;
   const SPIN_MAX_MS = 140;
   const REACTION_DELAY_MS = 1500;
+  /** Gunshot / feather-burst peak in turkey-trouble-fire.mp4 */
+  const FIRE_GUNSHOT_MS = 1130;
   const FAVORITES_KEY = "turkeyTroubleFavorites";
 
   const board = document.getElementById("board");
@@ -33,7 +35,9 @@
   const cameraWell = board.querySelector(".camera-well");
   const resultBanner = document.getElementById("result-banner");
   const turkeyBlast = document.getElementById("turkey-blast");
+  const fireVideo = document.getElementById("fire-video");
   const bustVideo = document.getElementById("bust-video");
+  const fireHit = document.getElementById("fire-hit");
   const scoreEl = document.getElementById("score");
   const scoreLabel = document.getElementById("score-label");
   const reactionStrip = document.getElementById("reaction-strip");
@@ -82,6 +86,9 @@
   let reactionCapturePromise = null;
   let audioCtx = null;
   let gobbleGain = null;
+  /** @type {Promise<void>|null} */
+  let fireVideoPromise = null;
+  let fireHitTimer = null;
   let dragFromIndex = null;
   let selectedFavoriteIndex = -1;
   let endTurnPlayerIndex = -1;
@@ -515,33 +522,90 @@
   }
 
   function playSting(_kind) {
-    // Intentionally silent — only spin gobbles should make sound
+    // Intentionally silent — spin gobbles + Fire!/bust videos handle SFX
   }
 
-  function playTurkeyAnimation() {
+  function clearFireHit() {
+    if (fireHitTimer) {
+      clearTimeout(fireHitTimer);
+      fireHitTimer = null;
+    }
+    fireHit.hidden = true;
+    fireHit.textContent = "";
+    fireHit.classList.remove("is-pop");
+    fireHit.setAttribute("aria-hidden", "true");
+  }
+
+  function scheduleFireHitAmount(text) {
+    clearFireHit();
+    fireHitTimer = setTimeout(() => {
+      fireHit.textContent = text;
+      fireHit.hidden = false;
+      fireHit.setAttribute("aria-hidden", "false");
+      fireHit.classList.remove("is-pop");
+      void fireHit.offsetWidth;
+      fireHit.classList.add("is-pop");
+      fireHitTimer = null;
+    }, FIRE_GUNSHOT_MS);
+  }
+
+  function hideOverlayVideos() {
+    clearFireHit();
+    [fireVideo, bustVideo].forEach((video) => {
+      if (!video) return;
+      video.pause();
+      video.hidden = true;
+    });
+    turkeyBlast.hidden = true;
+    cameraWell.classList.remove("is-blasting");
+  }
+
+  function playOverlayVideo(video) {
     return new Promise((resolve) => {
       const finish = () => {
-        bustVideo.pause();
-        bustVideo.removeEventListener("ended", onEnded);
-        bustVideo.removeEventListener("error", onEnded);
-        turkeyBlast.hidden = true;
-        cameraWell.classList.remove("is-blasting");
+        video.pause();
+        video.removeEventListener("ended", onEnded);
+        video.removeEventListener("error", onEnded);
+        video.hidden = true;
+        if ([fireVideo, bustVideo].every((v) => !v || v.hidden || v.paused)) {
+          turkeyBlast.hidden = true;
+          cameraWell.classList.remove("is-blasting");
+        }
         resolve();
       };
       const onEnded = () => finish();
 
+      [fireVideo, bustVideo].forEach((other) => {
+        if (!other || other === video) return;
+        other.pause();
+        other.hidden = true;
+      });
+
       turkeyBlast.hidden = false;
       cameraWell.classList.add("is-blasting");
-      bustVideo.currentTime = 0;
-      bustVideo.muted = false;
-      bustVideo.addEventListener("ended", onEnded);
-      bustVideo.addEventListener("error", onEnded);
+      video.hidden = false;
+      video.currentTime = 0;
+      video.muted = false;
+      video.addEventListener("ended", onEnded);
+      video.addEventListener("error", onEnded);
 
-      const playAttempt = bustVideo.play();
+      const playAttempt = video.play();
       if (playAttempt && typeof playAttempt.catch === "function") {
         playAttempt.catch(() => finish());
       }
     });
+  }
+
+  function playFireVideo() {
+    fireVideoPromise = playOverlayVideo(fireVideo).finally(() => {
+      clearFireHit();
+      if (fireVideoPromise) fireVideoPromise = null;
+    });
+    return fireVideoPromise;
+  }
+
+  function playTurkeyAnimation() {
+    return playOverlayVideo(bustVideo);
   }
 
   function pickNextIndex() {
@@ -569,6 +633,7 @@
 
   function startSpin() {
     if (!gameStarted || spinning || turnOver || !canAct) return;
+    hideOverlayVideos();
     hideBanner();
     awaitingChoice = false;
     tiles.forEach((t) => t.el.classList.remove("is-awarded"));
@@ -598,6 +663,8 @@
       }
       gobbleGain = null;
     }
+
+    const firePromise = playFireVideo();
 
     const landed = tiles[litIndex];
     if (!landed) {
@@ -634,12 +701,13 @@
       showBanner("TURKEY! Turn over", true);
       playSting("bust");
       updateActionButton();
-      finishTurnAfterTurkey();
+      finishTurnAfterTurkey(firePromise);
       return;
     }
 
+    scheduleFireHitAmount(formatValue(awardedValue));
     setTurnScore(turnScore + awardedValue);
-    showBanner(`+${formatValue(awardedValue)}!`);
+    hideBanner();
     playSting("win");
 
     landed.isTurkey = true;
@@ -659,7 +727,8 @@
     updateActionButton();
   }
 
-  async function finishTurnAfterTurkey() {
+  async function finishTurnAfterTurkey(firePromise) {
+    await (firePromise || fireVideoPromise || Promise.resolve());
     await playTurkeyAnimation();
     const playerName = players[currentPlayer]?.name || "Player";
     captureReaction({
