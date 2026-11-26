@@ -36,7 +36,8 @@
   const FAVORITES_KEY = "turkeyTroubleFavorites";
   const HIGH_SCORE_KEY = "turkeyTroubleHighScore";
   const SOUND_MODE_KEY = "turkeyTroubleSoundMode";
-  const VIDEO_REACTION_KEY = "turkeyTroubleVideoReaction";
+  const REACTION_MODE_KEY = "turkeyTroubleReactionMode";
+  const VIDEO_REACTION_KEY = "turkeyTroubleVideoReaction"; // legacy bool → migrated
 
   const board = document.getElementById("board");
   const boardLights = document.getElementById("board-lights");
@@ -87,7 +88,10 @@
   const roundsMenu = document.getElementById("rounds-menu");
   const scoreboard = document.getElementById("scoreboard");
   const roundLabel = document.getElementById("round-label");
-  const captureVideoToggle = document.getElementById("capture-video-toggle");
+  const reactionModePicker = document.getElementById("reaction-mode-picker");
+  const reactionModeTrigger = document.getElementById("reaction-mode-trigger");
+  const reactionModeTriggerIcons = document.getElementById("reaction-mode-trigger-icons");
+  const reactionModeMenu = document.getElementById("reaction-mode-menu");
   const soundModePicker = document.getElementById("sound-mode-picker");
   const soundModeTrigger = document.getElementById("sound-mode-trigger");
   const soundModeTriggerIcons = document.getElementById("sound-mode-trigger-icons");
@@ -103,25 +107,24 @@
     return "all";
   }
 
-  function loadStoredVideoReaction() {
+  /** @returns {"video" | "image" | "none"} */
+  function loadStoredReactionMode() {
     try {
-      const raw = localStorage.getItem(VIDEO_REACTION_KEY);
-      if (raw === "0" || raw === "false") return false;
-      if (raw === "1" || raw === "true") return true;
+      const raw = localStorage.getItem(REACTION_MODE_KEY);
+      if (raw === "video" || raw === "image" || raw === "none") return raw;
+      // Migrate legacy Video Reaction checkbox
+      const legacy = localStorage.getItem(VIDEO_REACTION_KEY);
+      if (legacy === "0" || legacy === "false") return "image";
+      if (legacy === "1" || legacy === "true") return "video";
     } catch (_) {
       /* ignore */
     }
-    return true;
+    return "video";
   }
 
   let soundMode = loadStoredSoundMode();
-  if (captureVideoToggle) {
-    captureVideoToggle.checked = loadStoredVideoReaction();
-    captureVideoToggle.setAttribute(
-      "aria-checked",
-      captureVideoToggle.checked ? "true" : "false"
-    );
-  }
+  /** @type {"video" | "image" | "none"} */
+  let reactionMode = loadStoredReactionMode();
   const SOUND_MODE_META = {
     all: {
       label: "All",
@@ -135,6 +138,20 @@
     mute: {
       label: "Mute",
       iconsHtml: '<span class="sound-mode-icon sound-mode-icon-mute"></span>',
+    },
+  };
+  const REACTION_MODE_META = {
+    video: {
+      label: "Video",
+      iconsHtml: '<span class="dl-icon dl-icon-video"></span>',
+    },
+    image: {
+      label: "Image",
+      iconsHtml: '<span class="dl-icon dl-icon-image"></span>',
+    },
+    none: {
+      label: "None",
+      iconsHtml: '<span class="dl-icon dl-icon-none"></span>',
     },
   };
   let selectedRounds = 1;
@@ -1060,7 +1077,20 @@
   }
 
   function isReactionVideoMode() {
-    return !!captureVideoToggle?.checked;
+    return reactionMode === "video";
+  }
+
+  function isReactionImageMode() {
+    return reactionMode === "image";
+  }
+
+  function isReactionNoneMode() {
+    return reactionMode === "none";
+  }
+
+  function syncReactionEmptyLabel() {
+    if (!reactionStrip) return;
+    reactionStrip.dataset.reactionMode = reactionMode;
   }
 
   function syncPlayModeToggle() {
@@ -1078,10 +1108,8 @@
     const editorOpen = !playersEditor.hidden;
     btnStartFromSetup.hidden = gameStarted || !editorOpen;
     roundsTrigger.disabled = gameStarted;
-    if (captureVideoToggle) {
-      captureVideoToggle.disabled = gameStarted;
-      captureVideoToggle.setAttribute("aria-checked", captureVideoToggle.checked ? "true" : "false");
-    }
+    // Reactions mode stays editable anytime (incl. mid-game / while set to None)
+    if (reactionModeTrigger) reactionModeTrigger.disabled = false;
     if (gameStarted) closeRoundsMenu();
     if (roundsPicker) roundsPicker.hidden = false;
     syncPlayModeToggle();
@@ -1108,6 +1136,7 @@
   function openRoundsMenu() {
     if (gameStarted || roundsTrigger.disabled) return;
     closeSoundModeMenu();
+    closeReactionModeMenu();
     roundsMenu.hidden = false;
     roundsTrigger.setAttribute("aria-expanded", "true");
   }
@@ -1587,17 +1616,38 @@
     soundModeTrigger.setAttribute("aria-expanded", "false");
   }
 
+  function closeReactionModeMenu() {
+    if (!reactionModeMenu || !reactionModeTrigger) return;
+    reactionModeMenu.hidden = true;
+    reactionModeTrigger.setAttribute("aria-expanded", "false");
+  }
+
   function openSoundModeMenu() {
     if (!soundModeMenu || !soundModeTrigger) return;
     closeRoundsMenu();
+    closeReactionModeMenu();
     soundModeMenu.hidden = false;
     soundModeTrigger.setAttribute("aria-expanded", "true");
+  }
+
+  function openReactionModeMenu() {
+    if (!reactionModeMenu || !reactionModeTrigger) return;
+    closeRoundsMenu();
+    closeSoundModeMenu();
+    reactionModeMenu.hidden = false;
+    reactionModeTrigger.setAttribute("aria-expanded", "true");
   }
 
   function toggleSoundModeMenu() {
     if (!soundModeMenu) return;
     if (soundModeMenu.hidden) openSoundModeMenu();
     else closeSoundModeMenu();
+  }
+
+  function toggleReactionModeMenu() {
+    if (!reactionModeMenu) return;
+    if (reactionModeMenu.hidden) openReactionModeMenu();
+    else closeReactionModeMenu();
   }
 
   function syncSoundModeToggle() {
@@ -1611,6 +1661,32 @@
       const on = opt.getAttribute("data-sound-mode") === soundMode;
       opt.setAttribute("aria-selected", on ? "true" : "false");
     });
+  }
+
+  function syncReactionModeToggle() {
+    const meta = REACTION_MODE_META[reactionMode] || REACTION_MODE_META.video;
+    if (reactionModeTriggerIcons) reactionModeTriggerIcons.innerHTML = meta.iconsHtml;
+    if (reactionModeTrigger) {
+      reactionModeTrigger.setAttribute("aria-label", `${meta.label}. Reactions`);
+      reactionModeTrigger.title = meta.label;
+    }
+    reactionModeMenu?.querySelectorAll("[data-reaction-mode]").forEach((opt) => {
+      const on = opt.getAttribute("data-reaction-mode") === reactionMode;
+      opt.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    syncReactionEmptyLabel();
+  }
+
+  function setReactionMode(mode) {
+    if (mode !== "video" && mode !== "image" && mode !== "none") return;
+    reactionMode = mode;
+    try {
+      localStorage.setItem(REACTION_MODE_KEY, reactionMode);
+    } catch (_) {
+      /* ignore quota / private mode */
+    }
+    syncReactionModeToggle();
+    closeReactionModeMenu();
   }
 
   function setSoundMode(mode) {
@@ -1764,7 +1840,39 @@
     fireHit.hidden = true;
     fireHit.textContent = "";
     fireHit.classList.remove("is-pop");
+    fireHit.style.removeProperty("--fire-hit-size");
     fireHit.setAttribute("aria-hidden", "true");
+  }
+
+  /**
+   * Keep the prize blast centered on the feather burst, but shrink the type so
+   * it never reaches the camera-well edges (incl. during the 1.06 pop scale).
+   */
+  function fitFireHitInWell() {
+    if (!fireHit || !cameraWell || fireHit.hidden) return;
+    const wellW = cameraWell.clientWidth;
+    const wellH = cameraWell.clientHeight;
+    if (wellW < 8 || wellH < 8) return;
+
+    const padX = Math.max(10, wellW * 0.07);
+    const padY = Math.max(8, wellH * 0.07);
+    const centerX = wellW * 0.8;
+    const centerY = wellH * 0.3;
+    // Room while staying centered on the burst — tightest side wins
+    const maxHalfW = Math.min(centerX - padX, wellW - padX - centerX);
+    const maxHalfH = Math.min(centerY - padY, wellH - padY - centerY);
+    const popPad = 1.08; // leave headroom for fire-hit-pop peak scale
+    const maxW = Math.max(20, maxHalfW * 2) / popPad;
+    const maxH = Math.max(14, maxHalfH * 2) / popPad;
+
+    fireHit.style.removeProperty("--fire-hit-size");
+    const base = parseFloat(getComputedStyle(fireHit).fontSize) || 24;
+    fireHit.style.setProperty("--fire-hit-size", `${base.toFixed(2)}px`);
+
+    const w = Math.max(1, fireHit.scrollWidth);
+    const h = Math.max(1, fireHit.scrollHeight);
+    const scale = Math.min(1, maxW / w, maxH / h);
+    fireHit.style.setProperty("--fire-hit-size", `${(base * scale).toFixed(2)}px`);
   }
 
   function scheduleFireHitAmount(text) {
@@ -1774,6 +1882,7 @@
       fireHit.hidden = false;
       fireHit.setAttribute("aria-hidden", "false");
       fireHit.classList.remove("is-pop");
+      fitFireHitInWell();
       void fireHit.offsetWidth;
       fireHit.classList.add("is-pop");
       fireHitTimer = null;
@@ -1966,12 +2075,14 @@
           name: playerName,
           untilPromise: bustPromise,
         });
-      } else {
+      } else if (isReactionImageMode()) {
         reactionCapturePromise = scheduleStillReaction({
           bust: true,
           label: reactionLabel,
           name: playerName,
         });
+      } else {
+        reactionCapturePromise = Promise.resolve();
       }
       finishTurnAfterTurkey(bustPromise);
       return;
@@ -1986,12 +2097,14 @@
         name: playerName,
         untilPromise: firePromise,
       });
-    } else {
+    } else if (isReactionImageMode()) {
       reactionCapturePromise = scheduleStillReaction({
         bust: false,
         label: reactionLabel,
         name: playerName,
       });
+    } else {
+      reactionCapturePromise = Promise.resolve();
     }
 
     scheduleFireHitAmount(formatValue(awardedValue));
@@ -2195,6 +2308,8 @@
    */
   async function flashReactionPhoto(reactionOrUrl, opts = {}) {
     if (!reactionFlash || !reactionFlashImage) return;
+    // Reactions → None: skip the between-pulls zinger / flash entirely
+    if (isReactionNoneMode()) return;
 
     const rate = typeof opts.rate === "number" && opts.rate > 0 ? opts.rate : 0.5;
     const trimToSpike = !!opts.trimToSpike;
@@ -3697,16 +3812,14 @@
   modeSingleBtn?.addEventListener("click", () => setPlayMode(false));
   modeMultiBtn?.addEventListener("click", () => setPlayMode(true));
   btnStartFromSetup.addEventListener("click", startGameFromSetup);
-  captureVideoToggle?.addEventListener("change", () => {
-    captureVideoToggle.setAttribute("aria-checked", captureVideoToggle.checked ? "true" : "false");
-    try {
-      localStorage.setItem(
-        VIDEO_REACTION_KEY,
-        captureVideoToggle.checked ? "1" : "0"
-      );
-    } catch (_) {
-      /* ignore quota / private mode */
-    }
+  reactionModeTrigger?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleReactionModeMenu();
+  });
+  reactionModeMenu?.addEventListener("click", (e) => {
+    const opt = e.target.closest("[data-reaction-mode]");
+    if (!opt) return;
+    setReactionMode(opt.getAttribute("data-reaction-mode"));
   });
   soundModeTrigger?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -3721,6 +3834,7 @@
   roundsTrigger.addEventListener("click", (e) => {
     e.stopPropagation();
     closeSoundModeMenu();
+    closeReactionModeMenu();
     toggleRoundsMenu();
   });
   roundsMenu.addEventListener("click", (e) => {
@@ -3732,6 +3846,7 @@
   document.addEventListener("click", (e) => {
     if (!roundsPicker.contains(e.target)) closeRoundsMenu();
     if (soundModePicker && !soundModePicker.contains(e.target)) closeSoundModeMenu();
+    if (reactionModePicker && !reactionModePicker.contains(e.target)) closeReactionModeMenu();
   });
   window.addEventListener("keydown", (e) => {
     if (e.code !== "Escape") return;
@@ -3743,9 +3858,14 @@
       closeSoundModeMenu();
       soundModeTrigger?.focus();
     }
+    if (reactionModeMenu && !reactionModeMenu.hidden) {
+      closeReactionModeMenu();
+      reactionModeTrigger?.focus();
+    }
   });
   setSelectedRounds(1);
   syncSoundModeToggle();
+  syncReactionModeToggle();
 
   addPlayerForm.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -3964,6 +4084,15 @@
     if (!horizontal) {
       boardRow.style.setProperty("--reactions-col", `${reactionsCol.toFixed(2)}px`);
     }
+
+    // Lock camera overlay type to the clip window (1 unit = 1% of well width)
+    const cameraWell = board.querySelector(".camera-well");
+    if (cameraWell) {
+      const wellW = cameraWell.clientWidth || 0;
+      if (wellW > 0) {
+        cameraWell.style.setProperty("--cam-u", `${(wellW / 100).toFixed(3)}px`);
+      }
+    }
   }
 
   let fitRaf = 0;
@@ -4045,6 +4174,7 @@
   updateActionButton();
   startCamera();
   syncSoundModeToggle();
+  syncReactionModeToggle();
   syncLobbyMusic();
 
   document.addEventListener(

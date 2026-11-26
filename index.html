@@ -71,19 +71,60 @@
           </div>
         </div>
         <div class="setup-toggles">
-          <label class="capture-mode-toggle" for="capture-video-toggle">
-            <input
-              id="capture-video-toggle"
-              type="checkbox"
-              role="switch"
-              checked
-              aria-checked="true"
-            />
-            <span class="capture-mode-switch" aria-hidden="true">
-              <span class="capture-mode-knob"></span>
-            </span>
-            <span class="capture-mode-text">Video Reaction</span>
-          </label>
+          <div class="sound-mode-picker" id="reaction-mode-picker">
+            <div class="sound-mode-control">
+              <button
+                type="button"
+                id="reaction-mode-trigger"
+                class="sound-mode-trigger"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="reaction-mode-menu"
+                aria-labelledby="reaction-mode-label"
+              >
+                <span id="reaction-mode-trigger-icons" class="sound-mode-option-icons" aria-hidden="true">
+                  <span class="dl-icon dl-icon-video"></span>
+                </span>
+                <span class="sound-mode-caret" aria-hidden="true"></span>
+              </button>
+              <ul id="reaction-mode-menu" class="sound-mode-menu" role="listbox" hidden>
+                <li
+                  role="option"
+                  tabindex="-1"
+                  data-reaction-mode="video"
+                  aria-selected="true"
+                >
+                  <span>Video</span>
+                  <span class="sound-mode-option-icons" aria-hidden="true">
+                    <span class="dl-icon dl-icon-video"></span>
+                  </span>
+                </li>
+                <li
+                  role="option"
+                  tabindex="-1"
+                  data-reaction-mode="image"
+                  aria-selected="false"
+                >
+                  <span>Image</span>
+                  <span class="sound-mode-option-icons" aria-hidden="true">
+                    <span class="dl-icon dl-icon-image"></span>
+                  </span>
+                </li>
+                <li
+                  role="option"
+                  tabindex="-1"
+                  data-reaction-mode="none"
+                  aria-selected="false"
+                >
+                  <span>None</span>
+                  <span class="sound-mode-option-icons" aria-hidden="true">
+                    <span class="dl-icon dl-icon-none"></span>
+                  </span>
+                </li>
+              </ul>
+            </div>
+            <span class="sound-mode-label" id="reaction-mode-label">Reactions</span>
+          </div>
           <div class="sound-mode-picker" id="sound-mode-picker">
             <div class="sound-mode-control">
               <button
