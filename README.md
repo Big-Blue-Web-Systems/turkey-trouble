@@ -10,7 +10,7 @@ Camera access needs localhost:
 npx serve .
 ```
 
-Open the URL it prints, allow the camera, then **Add Players**.
+Open the URL it prints, allow **camera and microphone**, then start a game.
 
 ## Rules
 

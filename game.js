@@ -919,12 +919,71 @@
   noWinnerComedy.volume = 0.38;
   noWinnerComedy.addEventListener("ended", () => syncLobbyMusic());
 
+  // Flash stings — remastered to lobby peak; play at lobby volume so they sit as loud as the theme.
+  const PRIZE_FLASH_STINGS = [
+    "assets/yippee.wav",
+    "assets/okay_lets_go.wav",
+    "assets/yeehaw.wav",
+    "assets/oh_yeah.wav",
+  ];
+  const TURKEY_FLASH_STINGS = ["assets/bruh.wav", "assets/yikes.wav"];
+  let prizeFlashStingIndex = 0;
+  let turkeyFlashStingIndex = 0;
+  /** @type {HTMLAudioElement|null} */
+  let activeFlashSting = null;
+
+  PRIZE_FLASH_STINGS.concat(TURKEY_FLASH_STINGS).forEach((src) => {
+    const a = new Audio(src);
+    a.preload = "auto";
+  });
+
   function lobbyMusicAllowed() {
     return soundMode === "all";
   }
 
   function effectsAllowed() {
     return soundMode !== "mute";
+  }
+
+  function stopFlashSting() {
+    if (!activeFlashSting) return;
+    try {
+      activeFlashSting.pause();
+      activeFlashSting.currentTime = 0;
+    } catch (_) {
+      /* ignore */
+    }
+    activeFlashSting = null;
+  }
+
+  function nextFlashStingSrc(kind) {
+    if (kind === "turkey") {
+      const src = TURKEY_FLASH_STINGS[turkeyFlashStingIndex % TURKEY_FLASH_STINGS.length];
+      turkeyFlashStingIndex = (turkeyFlashStingIndex + 1) % TURKEY_FLASH_STINGS.length;
+      return src;
+    }
+    const src = PRIZE_FLASH_STINGS[prizeFlashStingIndex % PRIZE_FLASH_STINGS.length];
+    prizeFlashStingIndex = (prizeFlashStingIndex + 1) % PRIZE_FLASH_STINGS.length;
+    return src;
+  }
+
+  /** Cycle prize/turkey flash VO — SFX, lobby-matched loudness. Resolves when the sting ends. */
+  function playFlashSting(kind) {
+    stopFlashSting();
+    if (!effectsAllowed()) return Promise.resolve();
+    const audio = new Audio(nextFlashStingSrc(kind));
+    audio.volume = lobbyMusic.volume;
+    activeFlashSting = audio;
+    return new Promise((resolve) => {
+      const done = () => {
+        if (activeFlashSting === audio) activeFlashSting = null;
+        resolve();
+      };
+      audio.addEventListener("ended", done, { once: true });
+      audio.addEventListener("error", done, { once: true });
+      const playAttempt = audio.play();
+      if (playAttempt) playAttempt.catch(done);
+    });
   }
 
   function isPodiumApplausePlaying() {
@@ -997,6 +1056,13 @@
     return [fireVideo, bustVideo].some((v) => v && v.classList.contains("is-showing"));
   }
 
+  /** True while the between-spins reaction flash is showing (lobby must stay silent). */
+  let reactionFlashPlaying = false;
+
+  function isReactionFlashPlaying() {
+    return reactionFlashPlaying;
+  }
+
   function isCardFlipSfxPlaying() {
     return effectsAllowed() && !cardFlipSfx.paused && !cardFlipSfx.ended;
   }
@@ -1067,6 +1133,7 @@
     closeSoundModeMenu();
     if (!effectsAllowed()) {
       stopCardFlipSfx();
+      stopFlashSting();
       stopResultFanfare();
       silenceSpinTicks();
     }
@@ -1094,6 +1161,7 @@
       !document.hidden &&
       !spinning &&
       !isOverlayClipPlaying() &&
+      !isReactionFlashPlaying() &&
       !isCardFlipSfxPlaying() &&
       !isPodiumApplausePlaying() &&
       !isNoWinnerComedyPlaying();
@@ -1421,10 +1489,7 @@
     finishPrizeAfterFire(firePromise, landed);
   }
 
-  async function flashReactionPhoto(dataUrl) {
-    if (!dataUrl || !reactionFlash || !reactionFlashImage) return;
-
-    reactionFlashImage.src = dataUrl;
+  async function decodeFlashImage() {
     try {
       if (typeof reactionFlashImage.decode === "function") {
         await reactionFlashImage.decode();
@@ -1440,6 +1505,207 @@
     } catch (_) {
       /* still show whatever we have */
     }
+  }
+
+  /** Flash mic playback is 2× louder than unity (HTMLAudio maxes at 1). */
+  const FLASH_AUDIO_GAIN = 2;
+
+  function stopFlashPlaybackAudio(audio, graph) {
+    if (audio) {
+      try {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    if (graph) {
+      try {
+        graph.source?.disconnect();
+      } catch (_) {
+        /* ignore */
+      }
+      try {
+        graph.gain?.disconnect();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+
+  /** Source seconds to keep from the cheer spike (≥1s → ~2s wall time at 0.5×). */
+  const FLASH_SPIKE_MIN_SEC = 1;
+
+  /**
+   * Find the cheer spike onset, then keep at least 1s of source from there
+   * (plays ~2s at 0.5×). Returns trim bounds + frame indices, or null if flat/quiet.
+   */
+  async function analyzeReactionAudioSpike(audioBlob, frameCount) {
+    if (!audioBlob || !frameCount) return null;
+    try {
+      ensureAudio();
+      const raw = await audioBlob.arrayBuffer();
+      const buffer = await audioCtx.decodeAudioData(raw.slice(0));
+      const channel = buffer.getChannelData(0);
+      const { sampleRate, duration } = buffer;
+      if (!channel.length || duration <= 0) return null;
+
+      const windowSec = 1 / REACTION_CLIP_FPS;
+      const windowSamples = Math.max(1, Math.floor(sampleRate * windowSec));
+      const energies = [];
+      for (let i = 0; i < channel.length; i += windowSamples) {
+        const end = Math.min(channel.length, i + windowSamples);
+        let sum = 0;
+        for (let j = i; j < end; j += 1) sum += channel[j] * channel[j];
+        energies.push(Math.sqrt(sum / (end - i)));
+      }
+      if (energies.length < 2) return null;
+
+      let peakIdx = 0;
+      let peak = energies[0];
+      for (let i = 1; i < energies.length; i += 1) {
+        if (energies[i] > peak) {
+          peak = energies[i];
+          peakIdx = i;
+        }
+      }
+
+      const sorted = energies.slice().sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)] || 0;
+      // Quiet / flat take — no useful spike to isolate
+      if (peak < 0.015 || peak < Math.max(median * 2.4, median + 0.012)) {
+        return null;
+      }
+
+      // Walk back from the peak to the start of the loud region
+      const threshold = Math.max(median * 2.0, peak * 0.38, 0.012);
+      let spikeStart = peakIdx;
+      while (spikeStart > 0 && energies[spikeStart - 1] >= threshold) spikeStart -= 1;
+
+      // ≥1s of source starting at the spike → ~2s playback at 0.5×
+      let startSec = spikeStart * windowSec;
+      let endSec = startSec + FLASH_SPIKE_MIN_SEC;
+      if (endSec > duration) {
+        endSec = duration;
+        startSec = Math.max(0, endSec - FLASH_SPIKE_MIN_SEC);
+      }
+      // If the whole take is shorter than 1s, use everything
+      if (duration < FLASH_SPIKE_MIN_SEC) {
+        startSec = 0;
+        endSec = duration;
+      }
+
+      let startFrame = Math.max(0, Math.floor(startSec * REACTION_CLIP_FPS));
+      let endFrame = Math.min(frameCount, Math.ceil(endSec * REACTION_CLIP_FPS));
+      const minFrames = Math.min(frameCount, Math.ceil(FLASH_SPIKE_MIN_SEC * REACTION_CLIP_FPS));
+      if (endFrame - startFrame < minFrames) {
+        endFrame = Math.min(frameCount, startFrame + minFrames);
+        if (endFrame - startFrame < minFrames) {
+          startFrame = Math.max(0, endFrame - minFrames);
+        }
+      }
+      if (startFrame >= endFrame) return null;
+
+      return { startSec, endSec, startFrame, endFrame, peakIdx };
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  }
+
+  /** 1s of source @ 0.5× → 2s on screen when there's no cheer spike. */
+  function defaultFlashTrim(frames, reaction) {
+    const need = Math.min(frames.length, Math.ceil(FLASH_SPIKE_MIN_SEC * REACTION_CLIP_FPS));
+    const sel = ensureSelectedFrameIndex(reaction);
+    let startFrame = Math.max(0, sel - Math.floor(need / 3));
+    if (startFrame + need > frames.length) startFrame = Math.max(0, frames.length - need);
+    const endFrame = Math.min(frames.length, startFrame + need);
+    return {
+      startFrame,
+      endFrame,
+      startSec: startFrame / REACTION_CLIP_FPS,
+      endSec: endFrame / REACTION_CLIP_FPS,
+    };
+  }
+
+  /**
+   * Play reaction frames (+ optional mic) in the expanded flash at `rate`.
+   * Fire! uses trimToSpike (cheer region, or 1s fallback → ~2s @ 0.5×).
+   * Bust plays the full clip at 2×. Audio is an SFX — respects mute.
+   */
+  async function playFlashClipAtRate(frames, reaction, rate, opts = {}) {
+    const playbackRate = rate > 0 ? rate : 1;
+    const frameInterval = Math.max(16, Math.round(1000 / REACTION_CLIP_FPS / playbackRate));
+    const trim = opts.trimToSpike
+      ? reaction?.flashTrim || defaultFlashTrim(frames, reaction)
+      : null;
+    const startFrame = trim ? trim.startFrame : 0;
+    const endFrame = trim ? trim.endFrame : frames.length;
+    const startSec = trim ? trim.startSec : 0;
+    let flashAudio = null;
+    let flashGraph = null;
+
+    // Flash audio counts as a sound effect (all / effects — not mute)
+    if (effectsAllowed() && reaction?.audioUrl) {
+      try {
+        ensureAudio();
+        flashAudio = new Audio(reaction.audioUrl);
+        flashAudio.playbackRate = playbackRate;
+        // Let pitch ride with rate — slow-mo deep / 2× chipmunk
+        if ("preservesPitch" in flashAudio) flashAudio.preservesPitch = false;
+        if ("mozPreservesPitch" in flashAudio) flashAudio.mozPreservesPitch = false;
+        if ("webkitPreservesPitch" in flashAudio) flashAudio.webkitPreservesPitch = false;
+        flashAudio.volume = 1;
+        flashAudio.currentTime = Math.max(0, startSec);
+        // Route through GainNode so we can go past HTMLAudio's 1.0 ceiling
+        const source = audioCtx.createMediaElementSource(flashAudio);
+        const gain = audioCtx.createGain();
+        gain.gain.value = FLASH_AUDIO_GAIN;
+        source.connect(gain);
+        gain.connect(audioCtx.destination);
+        flashGraph = { source, gain };
+        const playAttempt = flashAudio.play();
+        if (playAttempt) playAttempt.catch(() => {});
+      } catch (_) {
+        stopFlashPlaybackAudio(flashAudio, flashGraph);
+        flashAudio = null;
+        flashGraph = null;
+      }
+    }
+
+    try {
+      reactionFlashImage.src = frames[startFrame] || frames[0];
+      await decodeFlashImage();
+      for (let i = startFrame; i < endFrame; i += 1) {
+        reactionFlashImage.src = frames[i];
+        await waitMs(frameInterval);
+      }
+    } finally {
+      stopFlashPlaybackAudio(flashAudio, flashGraph);
+    }
+  }
+
+  /**
+   * Expanded reaction peek — still, or clip at rate when Video Reaction is on.
+   * Always plays a cycling flash sting (prize vs turkey). Video mode: sting, then recorded clip.
+   * @param {object|string} reactionOrUrl
+   * @param {{ rate?: number, trimToSpike?: boolean, kind?: "prize"|"turkey" }} [opts]
+   */
+  async function flashReactionPhoto(reactionOrUrl, opts = {}) {
+    if (!reactionFlash || !reactionFlashImage) return;
+
+    const rate = typeof opts.rate === "number" && opts.rate > 0 ? opts.rate : 0.5;
+    const trimToSpike = !!opts.trimToSpike;
+    const kind = opts.kind === "turkey" ? "turkey" : "prize";
+    const reaction =
+      reactionOrUrl && typeof reactionOrUrl === "object" ? reactionOrUrl : null;
+    const dataUrl = reaction ? reactionDisplayUrl(reaction) : reactionOrUrl;
+    if (!dataUrl) return;
+
+    const frames = reaction?.frames;
+    const playClip =
+      isReactionVideoMode() && Array.isArray(frames) && frames.length > 1;
 
     // Cover the live camera with the stored snapshot, then enlarge that composite
     reactionFlash.hidden = false;
@@ -1447,13 +1713,34 @@
     reactionFlash.setAttribute("aria-hidden", "false");
     cameraWell.classList.add("is-reaction-flash");
 
-    await waitMs(REACTION_FLASH_MS);
+    reactionFlashPlaying = true;
+    // Sting + optional reaction mic only — lobby stays out
+    stopCardFlipSfx();
+    syncLobbyMusic();
 
-    cameraWell.classList.remove("is-reaction-flash");
-    reactionFlash.classList.remove("is-on");
-    reactionFlash.hidden = true;
-    reactionFlash.setAttribute("aria-hidden", "true");
-    reactionFlashImage.removeAttribute("src");
+    try {
+      if (playClip) {
+        reactionFlashImage.src = frames[0] || dataUrl;
+        await decodeFlashImage();
+        // VO first, then 0.5× / 2× recorded playback
+        await playFlashSting(kind);
+        await playFlashClipAtRate(frames, reaction, rate, { trimToSpike });
+      } else {
+        reactionFlashImage.src = dataUrl;
+        await decodeFlashImage();
+        // Photo mode: sting is the flash audio; hold at least REACTION_FLASH_MS
+        await Promise.all([playFlashSting(kind), waitMs(REACTION_FLASH_MS)]);
+      }
+    } finally {
+      stopFlashSting();
+      reactionFlashPlaying = false;
+      cameraWell.classList.remove("is-reaction-flash");
+      reactionFlash.classList.remove("is-on");
+      reactionFlash.hidden = true;
+      reactionFlash.setAttribute("aria-hidden", "true");
+      reactionFlashImage.removeAttribute("src");
+      syncLobbyMusic();
+    }
   }
 
   async function finishPrizeAfterFire(firePromise, landed) {
@@ -1461,11 +1748,12 @@
     if (turnOver) return;
     // Wait for the normal in-turn snap (taken during Fire!), then flip — no new capture later
     await (reactionCapturePromise || Promise.resolve());
-    const reactionToShow = reactionDisplayUrl(players[currentPlayer]?.reactions?.at(-1));
+    const latest = players[currentPlayer]?.reactions?.at(-1) || null;
     if (turnOver) return;
     await playPrizeReveal(landed);
     if (turnOver) return;
-    await flashReactionPhoto(reactionToShow);
+    // Prize sting → cheer spike at half speed (or sting alone if video off)
+    await flashReactionPhoto(latest, { rate: 0.5, trimToSpike: true, kind: "prize" });
     if (turnOver) return;
     canAct = true;
     awaitingChoice = true;
@@ -1480,9 +1768,9 @@
       waitMs(TURKEY_MESSAGE_MS),
       reactionCapturePromise || Promise.resolve(),
     ]);
-    const latest = players[currentPlayer]?.reactions?.at(-1);
-    const reactionToShow = reactionDisplayUrl(latest) || null;
-    await flashReactionPhoto(reactionToShow);
+    const latest = players[currentPlayer]?.reactions?.at(-1) || null;
+    // Turkey sting → full bust clip at 2× (or sting alone if video off)
+    await flashReactionPhoto(latest, { rate: 2, kind: "turkey" });
     hideBanner();
     openEndTurnGallery("turkey");
   }
@@ -1881,6 +2169,64 @@
     });
   }
 
+  function pickAudioRecorderMimeType() {
+    const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+    if (typeof MediaRecorder === "undefined") return "";
+    return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  }
+
+  /** Parallel mic capture for the reaction clip window (same timeline as frames). */
+  function startReactionMicRecorder() {
+    if (!micAvailable || !micTrack || micTrack.readyState === "ended") return null;
+    if (typeof MediaRecorder === "undefined") return null;
+    try {
+      const stream = new MediaStream([micTrack]);
+      const mimeType = pickAudioRecorderMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      const chunks = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size) chunks.push(e.data);
+      };
+      const stopped = new Promise((resolve) => {
+        recorder.onstop = () => {
+          if (!chunks.length) {
+            resolve(null);
+            return;
+          }
+          const blob = new Blob(chunks, {
+            type: recorder.mimeType || chunks[0].type || "audio/webm",
+          });
+          resolve(blob.size ? blob : null);
+        };
+        recorder.onerror = () => resolve(null);
+      });
+      recorder.start(100);
+      return {
+        stop() {
+          if (recorder.state === "recording" || recorder.state === "paused") {
+            try {
+              recorder.requestData();
+            } catch (_) {
+              /* ignore */
+            }
+            try {
+              recorder.stop();
+            } catch (_) {
+              return Promise.resolve(null);
+            }
+            return stopped;
+          }
+          return Promise.resolve(null);
+        },
+      };
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  }
+
   async function captureReactionClip({ bust, label, name, untilPromise }) {
     if (!camera.srcObject) return;
     const frames = [];
@@ -1896,19 +2242,37 @@
       setTimeout(markStop, REACTION_CLIP_MS);
     }
 
-    // Capture from Fire!/bust start until the overlay clip ends
-    while (!stop && performance.now() - started < REACTION_CLIP_MAX_MS) {
-      const frame = grabReactionFrameDataUrl();
-      if (frame) frames.push(frame);
-      await waitMs(interval);
+    const micRec = startReactionMicRecorder();
+    let audioBlob = null;
+    try {
+      // Capture from Fire!/bust start until the overlay clip ends
+      while (!stop && performance.now() - started < REACTION_CLIP_MAX_MS) {
+        const frame = grabReactionFrameDataUrl();
+        if (frame) frames.push(frame);
+        await waitMs(interval);
+      }
+      const last = grabReactionFrameDataUrl();
+      if (last) frames.push(last);
+    } finally {
+      if (micRec) audioBlob = await micRec.stop();
     }
-    const last = grabReactionFrameDataUrl();
-    if (last) frames.push(last);
 
     if (!frames.length) return;
 
-    const selectedFrameIndex = Math.min(frames.length - 1, Math.floor(frames.length / 2));
+    const flashTrim = audioBlob
+      ? await analyzeReactionAudioSpike(audioBlob, frames.length)
+      : null;
+
+    let selectedFrameIndex = Math.min(frames.length - 1, Math.floor(frames.length / 2));
+    // Prefer a still from the cheer region when we found one
+    if (flashTrim) {
+      selectedFrameIndex = Math.min(
+        frames.length - 1,
+        Math.floor((flashTrim.startFrame + flashTrim.endFrame) / 2)
+      );
+    }
     const dataUrl = frames[selectedFrameIndex];
+    const audioUrl = audioBlob ? URL.createObjectURL(audioBlob) : null;
     const reaction = {
       dataUrl,
       frames,
@@ -1917,6 +2281,9 @@
       isClip: true,
       label,
       bust,
+      audioBlob: audioBlob || null,
+      audioUrl,
+      flashTrim,
     };
     const player = players[currentPlayer];
     if (player) {
@@ -2962,6 +3329,8 @@
     if (stageEl) chromeObserver.observe(stageEl);
     if (setupPanel) chromeObserver.observe(setupPanel);
     if (turnHud) chromeObserver.observe(turnHud);
+    const brandLogo = document.querySelector(".brand-logo");
+    if (brandLogo) chromeObserver.observe(brandLogo);
   }
   scheduleFitPlayArea();
   window.addEventListener("keydown", (e) => {
@@ -3022,21 +3391,59 @@
   );
   document.addEventListener("visibilitychange", syncLobbyMusic);
 
+  /** Full AV stream from getUserMedia (video for preview; mic track kept for future features). */
+  let mediaStream = null;
+  /** @type {MediaStreamTrack|null} */
+  let micTrack = null;
+  let micAvailable = false;
+
+  function attachCameraStream(stream, { hasMic }) {
+    mediaStream = stream;
+    micTrack = stream.getAudioTracks()[0] || null;
+    micAvailable = !!(hasMic && micTrack && micTrack.readyState !== "ended");
+    // Keep the <video> element muted so the mic isn't played back into the speakers.
+    camera.muted = true;
+    camera.srcObject = stream;
+    cameraStatus.classList.add("is-hidden");
+  }
+
   async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
       cameraStatus.textContent = "Camera not supported in this browser.";
       return;
     }
+
+    const videoConstraints = { facingMode: "user" };
+    const audioConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
+        video: videoConstraints,
+        audio: audioConstraints,
       });
-      camera.srcObject = stream;
-      cameraStatus.classList.add("is-hidden");
+      attachCameraStream(stream, { hasMic: true });
     } catch (err) {
       console.error(err);
-      cameraStatus.textContent = "Camera permission needed — allow access and reload.";
+      // Mic denied / missing — still try camera so the game is playable.
+      try {
+        const videoOnly = await navigator.mediaDevices.getUserMedia({
+          video: videoConstraints,
+          audio: false,
+        });
+        attachCameraStream(videoOnly, { hasMic: false });
+        cameraStatus.classList.remove("is-hidden");
+        cameraStatus.textContent =
+          "Mic blocked — allow microphone access and reload for reaction audio.";
+        setTimeout(() => cameraStatus.classList.add("is-hidden"), 4500);
+      } catch (videoErr) {
+        console.error(videoErr);
+        cameraStatus.textContent =
+          "Camera & mic permission needed — allow access and reload.";
+      }
     }
   }
 })();
