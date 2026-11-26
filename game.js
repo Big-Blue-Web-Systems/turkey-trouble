@@ -519,7 +519,7 @@
     if (!spinning) return;
     ensureAudio();
 
-    // Cut any overlapping gobble so spins don't become a noise bed
+    // Cut any overlapping tick so spins don't become a noise bed
     if (gobbleGain) {
       try {
         gobbleGain.gain.cancelScheduledValues(audioCtx.currentTime);
@@ -532,45 +532,44 @@
     }
 
     const now = audioCtx.currentTime;
-    const dur = 0.08;
     const master = audioCtx.createGain();
-    master.gain.value = 0.14;
+    master.gain.value = 0.24;
     master.connect(audioCtx.destination);
     gobbleGain = master;
 
-    const osc = audioCtx.createOscillator();
-    const filter = audioCtx.createBiquadFilter();
-    const gain = audioCtx.createGain();
-    const lfo = audioCtx.createOscillator();
-    const lfoGain = audioCtx.createGain();
+    // Bright game-show "boop" with a tiny cartoon bounce
+    const boop = audioCtx.createOscillator();
+    const boopGain = audioCtx.createGain();
+    const boopFilter = audioCtx.createBiquadFilter();
+    boop.type = "square";
+    boopFilter.type = "lowpass";
+    boopFilter.frequency.value = 2400;
+    boopFilter.Q.value = 0.7;
+    const base = 520 + Math.random() * 90;
+    boop.frequency.setValueAtTime(base, now);
+    boop.frequency.exponentialRampToValueAtTime(base * 1.35, now + 0.018);
+    boop.frequency.exponentialRampToValueAtTime(base * 0.55, now + 0.09);
+    boopGain.gain.setValueAtTime(0.0001, now);
+    boopGain.gain.exponentialRampToValueAtTime(1, now + 0.006);
+    boopGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+    boop.connect(boopFilter);
+    boopFilter.connect(boopGain);
+    boopGain.connect(master);
+    boop.start(now);
+    boop.stop(now + 0.12);
 
-    osc.type = "triangle";
-    filter.type = "bandpass";
-    filter.frequency.value = 620;
-    filter.Q.value = 3;
-
-    osc.frequency.setValueAtTime(320, now);
-    osc.frequency.linearRampToValueAtTime(160, now + 0.03);
-    osc.frequency.exponentialRampToValueAtTime(110, now + dur);
-
-    lfo.type = "sine";
-    lfo.frequency.value = 24;
-    lfoGain.gain.value = 30;
-    lfo.connect(lfoGain);
-    lfoGain.connect(osc.frequency);
-
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(1, now + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
-
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(master);
-
-    osc.start(now);
-    lfo.start(now);
-    osc.stop(now + dur + 0.02);
-    lfo.stop(now + dur + 0.02);
+    // Soft click transient on top
+    const click = audioCtx.createOscillator();
+    const clickGain = audioCtx.createGain();
+    click.type = "triangle";
+    click.frequency.setValueAtTime(1400, now);
+    click.frequency.exponentialRampToValueAtTime(700, now + 0.03);
+    clickGain.gain.setValueAtTime(0.45, now);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
+    click.connect(clickGain);
+    clickGain.connect(master);
+    click.start(now);
+    click.stop(now + 0.04);
   }
 
   function playSting(_kind) {
