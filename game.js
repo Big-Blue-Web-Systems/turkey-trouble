@@ -3086,6 +3086,7 @@
       player.reactions.push(reaction);
     }
     prependReactionCard(reaction, name);
+    warmReactionExports(reaction);
   }
 
   function captureReaction({ bust, label, name, score, hits }) {
@@ -3098,6 +3099,7 @@
       player.reactions.push(reaction);
     }
     prependReactionCard(reaction, name);
+    warmReactionExports(reaction);
   }
 
   function ensureSelectedFrameIndex(reaction) {
@@ -3130,6 +3132,10 @@
     reaction.selectedFrameIndex = idx;
     reaction.frameIndex = idx;
     reaction.dataUrl = reaction.frames[idx];
+    // Selected still changed — drop cached PNG so the next save matches
+    reaction._exportPngBlob = null;
+    reaction._exportPngPromise = null;
+    warmReactionPngExport(reaction);
     return reaction.dataUrl;
   }
 
@@ -3267,6 +3273,36 @@
     }
   }
 
+  async function trySaveFilePicker(entries) {
+    if (typeof window.showSaveFilePicker !== "function") return false;
+    if (isLikelyMobileDevice()) return false;
+    if (!entries?.length) return false;
+    try {
+      for (const { blob, filename } of entries) {
+        const name = String(filename || "reaction.bin");
+        const mime = blob.type || mimeFromFilename(name);
+        const extMatch = /\.[a-z0-9]+$/i.exec(name);
+        const ext = extMatch ? extMatch[0].toLowerCase() : "";
+        const handle = await window.showSaveFilePicker({
+          suggestedName: name,
+          types: [
+            {
+              description: "Reaction file",
+              accept: { [mime]: ext ? [ext] : [".bin"] },
+            },
+          ],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      }
+      return true;
+    } catch (err) {
+      if (err && err.name === "AbortError") return true;
+      return false;
+    }
+  }
+
   async function tryHostDownloadEntries(entries) {
     if (!isEmbeddedFrame() || !entries.length) return false;
     try {
@@ -3279,7 +3315,6 @@
           buffer,
         });
       }
-      // Multi-file: send each; host can save sequentially
       for (const { blob, filename } of entries) {
         const buffer = await blob.arrayBuffer();
         requestHostDownload({
@@ -3294,109 +3329,24 @@
     }
   }
 
-  const saveSheet = document.getElementById("save-sheet");
-  const saveSheetBackdrop = document.getElementById("save-sheet-backdrop");
-  const saveSheetImage = document.getElementById("save-sheet-image");
-  const saveSheetVideo = document.getElementById("save-sheet-video");
-  const saveSheetHint = document.getElementById("save-sheet-hint");
-  const saveSheetConfirm = document.getElementById("save-sheet-confirm");
-  const saveSheetCancel = document.getElementById("save-sheet-cancel");
-  /** @type {{ blob: Blob, filename: string }[] | null} */
-  let pendingSaveEntries = null;
-  let pendingSaveObjectUrl = null;
-
-  function clearSaveSheetPreview() {
-    if (pendingSaveObjectUrl) {
-      URL.revokeObjectURL(pendingSaveObjectUrl);
-      pendingSaveObjectUrl = null;
-    }
-    if (saveSheetImage) {
-      saveSheetImage.hidden = true;
-      saveSheetImage.removeAttribute("src");
-    }
-    if (saveSheetVideo) {
-      saveSheetVideo.pause?.();
-      saveSheetVideo.hidden = true;
-      saveSheetVideo.removeAttribute("src");
-      saveSheetVideo.load?.();
-    }
-  }
-
-  function closeSaveSheet() {
-    clearSaveSheetPreview();
-    pendingSaveEntries = null;
-    if (saveSheet) {
-      saveSheet.hidden = true;
-    }
-  }
-
-  function openSaveSheet(entries) {
-    if (!saveSheet || !entries?.length) return;
-    clearSaveSheetPreview();
-    pendingSaveEntries = entries;
-    const primary = entries[0];
-    const isVideo = /^video\//.test(primary.blob.type || "") || /\.(mp4|webm)$/i.test(primary.filename);
-    pendingSaveObjectUrl = URL.createObjectURL(primary.blob);
-
-    if (isVideo && saveSheetVideo) {
-      saveSheetVideo.src = pendingSaveObjectUrl;
-      saveSheetVideo.hidden = false;
-      if (saveSheetHint) {
-        saveSheetHint.textContent =
-          entries.length > 1
-            ? "Tap Save to share all clips, then choose Save Video."
-            : "Tap Save, then choose Save Video. Or press and hold the preview.";
-      }
-    } else if (saveSheetImage) {
-      saveSheetImage.src = pendingSaveObjectUrl;
-      saveSheetImage.hidden = false;
-      if (saveSheetHint) {
-        saveSheetHint.textContent =
-          entries.length > 1
-            ? "Tap Save to share all photos, then choose Save Image."
-            : "Tap Save, then choose Save Image. Or press and hold the preview.";
-      }
-    }
-
-    saveSheet.hidden = false;
-  }
-
-  async function confirmSaveSheet() {
-    const entries = pendingSaveEntries;
-    if (!entries?.length) {
-      closeSaveSheet();
-      return;
-    }
-    // Fresh tap → share / download with a valid user gesture
-    if (await tryShareFiles(entries)) {
-      closeSaveSheet();
-      return;
-    }
-    if (await tryHostDownloadEntries(entries)) {
-      closeSaveSheet();
-      return;
-    }
-    entries.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
-    closeSaveSheet();
-  }
-
   /**
-   * Cross-device save.
-   * Mobile: always show Save-to-Camera-Roll prompt (fresh tap → Web Share).
-   * Desktop: Web Share if available, else host iframe / anchor download.
+   * Mobile → native share sheet (Save Image / Save Video).
+   * Desktop → Finder/Explorer save picker (never the Share menu).
    * @param {{ blob: Blob, filename: string }[]} entries
    */
   async function saveFilesToDevice(entries) {
     const list = (entries || []).filter((e) => e?.blob);
     if (!list.length) return;
 
-    // After async render/encode the original tap's gesture is gone — prompt first.
     if (isLikelyMobileDevice()) {
-      openSaveSheet(list);
+      if (await tryShareFiles(list)) return;
+      if (await tryHostDownloadEntries(list)) return;
+      list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
       return;
     }
 
-    if (await tryShareFiles(list)) return;
+    // Desktop: Finder/Explorer for one file; batch saves skip the multi-dialog slog
+    if (list.length === 1 && (await trySaveFilePicker(list))) return;
     if (await tryHostDownloadEntries(list)) return;
     list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
   }
@@ -3446,20 +3396,61 @@
     return (await canvasToBlob(canvas, "image/png")) || dataUrlToBlob(canvas.toDataURL("image/png"));
   }
 
+  function warmReactionPngExport(reaction) {
+    if (!reaction || reaction._exportPngBlob || reaction._exportPngPromise) return;
+    reaction._exportPngPromise = renderReactionPngBlob(reaction)
+      .then((blob) => {
+        if (blob) reaction._exportPngBlob = blob;
+        return blob;
+      })
+      .catch(() => null)
+      .finally(() => {
+        reaction._exportPngPromise = null;
+      });
+  }
+
+  function warmReactionExports(reaction) {
+    if (!reaction) return;
+    warmReactionPngExport(reaction);
+    warmReactionVideoExport(reaction);
+  }
+
+  async function getReactionPngExport(reactionOrUrl) {
+    const reaction =
+      reactionOrUrl && typeof reactionOrUrl === "object" ? reactionOrUrl : null;
+    if (reaction?._exportPngBlob) return reaction._exportPngBlob;
+    if (reaction?._exportPngPromise) {
+      const warmed = await reaction._exportPngPromise;
+      if (warmed) return warmed;
+    }
+    const blob = await renderReactionPngBlob(reactionOrUrl);
+    if (blob && reaction) reaction._exportPngBlob = blob;
+    return blob;
+  }
+
   async function downloadReactionWithBanner(reactionOrUrl, filename) {
     const name = pngDownloadName(filename);
-    const blob = await renderReactionPngBlob(reactionOrUrl);
+    const blob = await getReactionPngExport(reactionOrUrl);
     if (!blob) return;
     await saveBlobToDevice(blob, name);
   }
 
-  function pickRecorderMimeType() {
-    const types = [
-      "video/mp4",
-      "video/webm;codecs=vp9",
-      "video/webm;codecs=vp8",
-      "video/webm",
-    ];
+  function pickRecorderMimeType(withAudio = false) {
+    const types = withAudio
+      ? [
+          "video/mp4",
+          "video/webm;codecs=vp9,opus",
+          "video/webm;codecs=vp8,opus",
+          "video/webm;codecs=vp9",
+          "video/webm;codecs=vp8",
+          "video/webm",
+        ]
+      : [
+          "video/mp4",
+          "video/webm;codecs=vp9,opus",
+          "video/webm;codecs=vp8,opus",
+          "video/webm",
+        ];
     if (typeof MediaRecorder === "undefined") return "";
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
   }
@@ -3472,15 +3463,74 @@
     return isReactionVideoMode();
   }
 
-  async function downloadReactionVideo(reaction, filename) {
-    const frames = reaction?.frames?.length ? reaction.frames : null;
-    if (!frames?.length) {
-      await downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
-      return;
+  async function reactionAudioBlob(reaction) {
+    if (reaction?.audioBlob instanceof Blob && reaction.audioBlob.size) {
+      return reaction.audioBlob;
     }
+    if (!reaction?.audioUrl) return null;
+    try {
+      const res = await fetch(reaction.audioUrl);
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return blob.size ? blob : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Decode mic take into a MediaStream track (no speaker playback). */
+  async function createExportAudioFeed(audioBlob) {
+    if (!audioBlob) return null;
+    try {
+      ensureAudio();
+      if (!audioCtx) return null;
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      const raw = await audioBlob.arrayBuffer();
+      const buffer = await audioCtx.decodeAudioData(raw.slice(0));
+      const dest = audioCtx.createMediaStreamDestination();
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(dest);
+      const track = dest.stream.getAudioTracks()[0] || null;
+      if (!track) return null;
+      return {
+        track,
+        start() {
+          try {
+            source.start(0);
+          } catch (_) {
+            /* already started */
+          }
+        },
+        stop() {
+          try {
+            source.stop();
+          } catch (_) {
+            /* ignore */
+          }
+          try {
+            source.disconnect();
+          } catch (_) {
+            /* ignore */
+          }
+          dest.stream.getTracks().forEach((t) => t.stop());
+        },
+      };
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  }
+
+  /**
+   * Encode reaction frames (+ mic audio when present) to a downloadable video blob.
+   * @returns {Promise<{ blob: Blob, ext: string, mime: string } | null>}
+   */
+  async function buildReactionVideoBlob(reaction) {
+    const frames = reaction?.frames?.length ? reaction.frames : null;
+    if (!frames?.length) return null;
     if (typeof MediaRecorder === "undefined" || !HTMLCanvasElement.prototype.captureStream) {
-      await downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
-      return;
+      return null;
     }
 
     const first = await loadImageFromUrl(frames[0]);
@@ -3502,8 +3552,15 @@
     canvas.width = outW;
     canvas.height = outH;
     const ctx = canvas.getContext("2d");
-    const stream = canvas.captureStream(REACTION_CLIP_FPS);
-    const mimeType = pickRecorderMimeType();
+    const videoStream = canvas.captureStream(REACTION_CLIP_FPS);
+
+    const audioBlob = await reactionAudioBlob(reaction);
+    const audioFeed = await createExportAudioFeed(audioBlob);
+    const tracks = [...videoStream.getVideoTracks()];
+    if (audioFeed?.track) tracks.push(audioFeed.track);
+    const stream = new MediaStream(tracks);
+
+    const mimeType = pickRecorderMimeType(!!audioFeed?.track);
     const recorder = mimeType
       ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12000000 })
       : new MediaRecorder(stream, { videoBitsPerSecond: 12000000 });
@@ -3523,23 +3580,93 @@
     };
 
     paintFrame(first);
+    audioFeed?.start();
     recorder.start(100);
 
     const frameDelay = Math.round(1000 / REACTION_CLIP_FPS);
-    for (let i = 1; i < frames.length; i += 1) {
+    try {
+      for (let i = 1; i < frames.length; i += 1) {
+        await waitMs(frameDelay);
+        const frameImg = await loadImageFromUrl(frames[i]);
+        paintFrame(frameImg);
+      }
       await waitMs(frameDelay);
-      const frameImg = await loadImageFromUrl(frames[i]);
-      paintFrame(frameImg);
+    } finally {
+      try {
+        recorder.stop();
+      } catch (_) {
+        /* ignore */
+      }
+      audioFeed?.stop();
+      stream.getTracks().forEach((t) => t.stop());
+      videoStream.getTracks().forEach((t) => t.stop());
     }
-    await waitMs(frameDelay);
-    recorder.stop();
-    stream.getTracks().forEach((t) => t.stop());
     await stopped;
 
-    const outType = recorder.mimeType || mimeType || "video/webm";
-    const ext = outType.includes("mp4") ? "mp4" : "webm";
+    if (!chunks.length) return null;
+    const mime = recorder.mimeType || mimeType || "video/webm";
+    const ext = mime.includes("mp4") ? "mp4" : "webm";
+    return { blob: new Blob(chunks, { type: mime }), ext, mime };
+  }
+
+  /** Pre-encode so mobile share can open on the download tap (gesture still valid). */
+  function warmReactionVideoExport(reaction) {
+    if (!reactionHasClip(reaction)) return;
+    if (reaction._exportVideoBlob || reaction._exportVideoPromise) return;
+    reaction._exportVideoPromise = buildReactionVideoBlob(reaction)
+      .then((built) => {
+        if (built?.blob) {
+          reaction._exportVideoBlob = built.blob;
+          reaction._exportVideoExt = built.ext;
+          reaction._exportVideoMime = built.mime;
+        }
+        return built;
+      })
+      .catch((err) => {
+        console.error(err);
+        return null;
+      })
+      .finally(() => {
+        reaction._exportVideoPromise = null;
+      });
+  }
+
+  async function getReactionVideoExport(reaction) {
+    if (reaction?._exportVideoBlob) {
+      return {
+        blob: reaction._exportVideoBlob,
+        ext: reaction._exportVideoExt || "webm",
+        mime: reaction._exportVideoMime || reaction._exportVideoBlob.type,
+      };
+    }
+    if (reaction?._exportVideoPromise) {
+      const built = await reaction._exportVideoPromise;
+      if (built?.blob) return built;
+    }
+    const built = await buildReactionVideoBlob(reaction);
+    if (built?.blob && reaction) {
+      reaction._exportVideoBlob = built.blob;
+      reaction._exportVideoExt = built.ext;
+      reaction._exportVideoMime = built.mime;
+    }
+    return built;
+  }
+
+  async function downloadReactionVideo(reaction, filename) {
+    const frames = reaction?.frames?.length ? reaction.frames : null;
+    if (!frames?.length) {
+      await downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
+      return;
+    }
+
+    const built = await getReactionVideoExport(reaction);
+    if (!built?.blob) {
+      await downloadReactionWithBanner(reaction, filename.replace(/\.(webm|mp4)$/i, ".png"));
+      return;
+    }
+
     const base = String(filename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
-    await saveBlobToDevice(new Blob(chunks, { type: outType }), `${base}.${ext}`);
+    await saveBlobToDevice(built.blob, `${base}.${built.ext || "webm"}`);
   }
 
   function syncPreviewDownloadButtons() {
@@ -3579,6 +3706,7 @@
       }
     }
     syncPreviewDownloadButtons();
+    warmReactionExports(reaction);
     if (hasClip && previewPlay && previewScrub && previewTime) {
       previewClipPlayer = createClipPlayer({
         reaction,
@@ -3809,6 +3937,7 @@
 
     modalBody.innerHTML = "";
     entries.forEach((r, i) => {
+      warmReactionExports(r);
       const filename = `${player.name}-reaction-${i + 1}.png`;
       const hasClip = reactionHasClip(r);
       const showVideoDl = showVideoDownloadControls();
@@ -3891,7 +4020,7 @@
     dlAll.addEventListener("click", async () => {
       const files = [];
       for (let i = 0; i < entries.length; i += 1) {
-        const blob = await renderReactionPngBlob(entries[i]);
+        const blob = await getReactionPngExport(entries[i]);
         if (blob) {
           files.push({
             blob,
@@ -4350,15 +4479,6 @@
     const base = String(previewFilename || "reaction").replace(/\.(jpg|jpeg|png|webm|mp4)$/i, "");
     await downloadReactionVideo(previewReaction, `${base}.webm`);
   });
-  saveSheetConfirm?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    confirmSaveSheet();
-  });
-  saveSheetCancel?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    closeSaveSheet();
-  });
-  saveSheetBackdrop?.addEventListener("click", () => closeSaveSheet());
   previewSelectFrame?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!previewReaction?.frames?.length) return;
@@ -4641,15 +4761,11 @@
   }
   scheduleFitPlayArea();
   window.addEventListener("keydown", (e) => {
-    if (e.code === "Escape" && saveSheet && !saveSheet.hidden) {
-      closeSaveSheet();
-      return;
-    }
     if (e.code === "Escape" && !previewModal.hidden) {
       closeReactionPreview();
       return;
     }
-    if (!previewModal.hidden || !modalRoot.hidden || (saveSheet && !saveSheet.hidden)) return;
+    if (!previewModal.hidden || !modalRoot.hidden) return;
     if (isReactionsHorizontal()) {
       if (e.code === "ArrowLeft") {
         e.preventDefault();
