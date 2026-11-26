@@ -3440,9 +3440,15 @@
       await navigator.share(data);
       return true;
     } catch (err) {
-      // Real user cancel. In iframes (BBV) WebKit sometimes AbortErrors without a
-      // sheet after a lost tap gesture — return false so host download can run.
-      if (err && err.name === "AbortError") return !isEmbeddedFrame();
+      if (err && err.name === "AbortError") {
+        // Real dismiss usually still has transient activation; WebKit false-aborts
+        // after lost gesture (await before share) do not — fall through to Save chip.
+        if (navigator.userActivation?.isActive) return true;
+        if (typeof navigator.userActivation === "undefined") {
+          return !isEmbeddedFrame();
+        }
+        return false;
+      }
       return false;
     }
   }
@@ -3585,8 +3591,7 @@
   }
 
   /**
-   * Mobile standalone → share sheet.
-   * Mobile BBV iframe → host download first (share is flaky after async image render).
+   * Mobile → Web Share first (Save Image / Save Video), then host, then anchor.
    * Desktop → Finder/Explorer (single file) or folder picker (batch). Never Share.
    * @param {{ blob: Blob, filename: string }[]} entries
    */
@@ -3600,14 +3605,8 @@
     if (!list.length) return;
 
     if (isLikelyMobileDevice()) {
-      // Embedded shells: host is reliable; share often AbortErrors once the tap gesture is gone
-      if (isEmbeddedFrame()) {
-        if (await tryHostDownloadEntries(list)) return;
-        if (await tryShareFiles(list)) return;
-      } else {
-        if (await tryShareFiles(list)) return;
-        if (await tryHostDownloadEntries(list)) return;
-      }
+      if (await tryShareFiles(list)) return;
+      if (await tryHostDownloadEntries(list)) return;
       list.forEach(({ blob, filename }) => triggerAnchorDownload(blob, filename));
       return;
     }
@@ -3725,23 +3724,31 @@
 
   async function downloadReactionWithBanner(reactionOrUrl, filename) {
     const name = pngDownloadName(filename);
-    // Desktop: open Finder/Explorer on the click, before async render loses the gesture
-    const desktop = await reserveDesktopSave(name);
-    if (desktop?.cancelled) return;
 
-    // Keep warm moving so a second tap (or this await) is more likely to hit cache
-    if (reactionOrUrl && typeof reactionOrUrl === "object") {
-      warmReactionPngExport(reactionOrUrl);
-    }
-
-    const blob = await getReactionPngExport(reactionOrUrl);
-    if (!blob) return;
-
-    if (desktop?.handle) {
-      await writeBlobToFileHandle(desktop.handle, blob);
+    if (!isLikelyMobileDevice()) {
+      // Desktop: open Finder/Explorer on the click, before async render loses the gesture
+      const desktop = await reserveDesktopSave(name);
+      if (desktop?.cancelled) return;
+      const blob = await getReactionPngExport(reactionOrUrl);
+      if (!blob) return;
+      if (desktop?.handle) {
+        await writeBlobToFileHandle(desktop.handle, blob);
+        return;
+      }
+      await saveBlobToDevice(blob, desktop?.filename || name);
       return;
     }
-    await saveBlobToDevice(blob, desktop?.filename || name);
+
+    // Mobile: prefer already-warmed PNG so share keeps the tap gesture
+    const reaction =
+      reactionOrUrl && typeof reactionOrUrl === "object" ? reactionOrUrl : null;
+    let blob = reaction?._exportPngBlob || null;
+    if (!blob) {
+      if (reaction) warmReactionPngExport(reaction);
+      blob = await getReactionPngExport(reactionOrUrl);
+    }
+    if (!blob) return;
+    await saveBlobToDevice(blob, name);
   }
 
   function pickRecorderMimeType(withAudio = false) {
@@ -4032,6 +4039,8 @@
     }
     syncPreviewDownloadButtons();
     warmReactionExports(reaction);
+    // Ensure PNG bake is underway even if video deferral is the only warm path
+    if (!reaction._exportPngBlob) warmReactionPngExport(reaction);
     if (hasClip && previewPlay && previewScrub && previewTime) {
       previewClipPlayer = createClipPlayer({
         reaction,
